@@ -1,0 +1,14 @@
+{
+  "name": "Illustrator Arrow 2",
+  "description": "Arrow 2 outline from the installed Adobe Illustrator Arrowheads.ai symbol. Coordinates normalized to a rightward tip at (0,0), at 1 pt stroke and 100% scale. SVG y is downward.",
+  "source": "Adobe Illustrator 2026/Support Files/Required/Resources/en_US/Arrowheads.ai, native symbol Arrow 2",
+  "reference_stroke_pt": 1.0,
+  "shaft_stop_before_tip": 7.06055,
+  "commands": [
+    ["M", 0, 0],
+    ["L", -9.94922, -4.06543],
+    ["L", -7.58838, 0],
+    ["L", -9.94922, 4.06445],
+    ["Z"]
+  ]
+}
