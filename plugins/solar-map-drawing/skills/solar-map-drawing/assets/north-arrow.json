@@ -1,0 +1,47 @@
+{
+  "description": "Canonical north needle from finished artwork, normalized north-up. Outlined left half, filled right half; even-odd transparent cutout.",
+  "height": 34.365431,
+  "commands": [
+    [
+      "M",
+      -9.978707,
+      34.365431
+    ],
+    [
+      "L",
+      -0.0,
+      22.535032
+    ],
+    [
+      "L",
+      9.977944,
+      34.365212
+    ],
+    [
+      "L",
+      0.0,
+      0.0
+    ],
+    [
+      "Z"
+    ],
+    [
+      "M",
+      -7.087135,
+      29.496182
+    ],
+    [
+      "L",
+      -0.000521,
+      3.781908
+    ],
+    [
+      "L",
+      0.000115,
+      20.724989
+    ],
+    [
+      "Z"
+    ]
+  ]
+}
