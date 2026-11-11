@@ -1,0 +1,10 @@
+{
+  "name": "pv-labels-tools",
+  "interface": { "displayName": "PV Labels Tools" },
+  "plugins": [
+    {
+      "name": "solar-map-drawing",
+      "source": { "source": "local", "path": "./plugins/solar-map-drawing" }
+    }
+  ]
+}
