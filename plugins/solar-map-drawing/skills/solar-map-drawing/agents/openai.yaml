@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solar Map Drawing"
+  short_description: "Trace faithful, editable solar facilities maps"
+  default_prompt: "Use $solar-map-drawing to turn this customer drawing into an editable map, checking the building, roof, panels, and equipment before fitting a placard template."
