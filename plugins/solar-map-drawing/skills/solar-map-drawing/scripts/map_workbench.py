@@ -6,19 +6,61 @@ Page numbers in the CLI are one-based; all geometry uses displayed page points.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import html
+import importlib.util
 import json
 import math
+import os
 import re
+import statistics
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 from PIL import Image, ImageDraw
 
 # Physical points in the final drawing; never multiplied by map fit scale.
-ROLES = {"building": 2.0, "roof": 1.0, "solar": 1.25, "equipment": 1.5,
+ROLES = {"building": 2.0, "roof": 1.0, "wall": 1.0, "solar": 1.25, "solar_field": 1.25, "equipment": 1.5,
          "context": 1.0, "north": 1.5, "leader": 0.75, "feature": 1.0}
+OUTPUT_MODES = ('map-only', 'map-labeled', 'finished')
+
+
+def apply_output_mode(scene, mode=None):
+    """Change the deliverable scope without mutating the reviewed source scene."""
+    mode = mode if mode is not None else scene.get('output_mode')
+    if mode is None:
+        return scene  # Keep existing scenes and callers compatible.
+    if mode not in OUTPUT_MODES:
+        raise ValueError('output_mode must be map-only, map-labeled or finished')
+    result = copy.deepcopy(scene)
+    result['output_mode'] = mode
+    if mode == 'finished' and not result.get('placard'):
+        raise ValueError('Finished output needs source-confirmed placard size and warning metadata')
+    if result.get('placard'):
+        result['placard']['include_chrome'] = mode == 'finished'
+    if result.get('north_arrow'):
+        result['north_arrow']['include_label'] = mode != 'map-only'
+    if mode == 'map-only':
+        result['callouts'] = []
+        result['labels'] = []
+        result.pop('callout_layout', None)
+        result['elements'] = [e for e in result.get('elements', []) if e.get('role') != 'leader']
+        for road in result.get('roads', []):
+            road.pop('label', None)
+    return result
+
+
+def placard_tools():
+    global _PLACARD_TOOLS
+    if '_PLACARD_TOOLS' not in globals():
+        spec=importlib.util.spec_from_file_location('solar_placard_layout',Path(__file__).with_name('placard_layout.py'))
+        _PLACARD_TOOLS=importlib.util.module_from_spec(spec);spec.loader.exec_module(_PLACARD_TOOLS)
+    return _PLACARD_TOOLS
 
 
 def read_json(path):
@@ -184,7 +226,13 @@ def extract(source, page_number, clip, output):
         zoom = 1800 / max(region.width, region.height)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=region)
         pix.save(output/"source.png")
-        manifest = {"version": 1, "source": str(Path(source).resolve()),
+        # Keep a job movable between chat sessions and machines. Legacy absolute
+        # manifests remain readable; new jobs resolve the PDF beside the manifest.
+        try:
+            source_reference = Path(os.path.relpath(Path(source).resolve(), output.resolve())).as_posix()
+        except ValueError:  # Separate Windows drives cannot have relative paths.
+            source_reference = str(Path(source).resolve())
+        manifest = {"version": 1, "source": source_reference,
                     "sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
                     "page": page_number, "page_bounds": list(page.rect), "page_rotation": page.rotation,
                     "viewport": list(region), "preview_size": [pix.width, pix.height],
@@ -243,6 +291,9 @@ def resolve_elements(scene, manifest):
                 p = available[sid]
                 if p["crosses_crop"]:
                     warnings.append(f"{sid} crosses extraction crop; inspect clipping")
+                source_dash=re.match(r'\[([^]]*)\]',str(p.get('dashes','')))
+                if source_dash and any(float(v)>0 for v in re.findall(r'[-\d.]+',source_dash[1])) and not el.get('dash_pt') and not el.get('dash_conversion_evidence'):
+                    warnings.append(f'{eid}: source path {sid} is dashed; preserve its meaning with dash_pt or record dash_conversion_evidence')
                 commands_list.append(p["commands"])
         else:
             if not el.get("evidence"):
@@ -308,7 +359,9 @@ def alignment_for(scene, elements):
     dominant = math.degrees(math.atan2(sy,sx))/4
     candidates = [(a,w) for a,w in angles if abs((a-dominant+45)%90-45)<10]
     angle = max(candidates or angles, key=lambda pair: pair[1])[0]
-    rotation = -((angle+22.5)%45-22.5)
+    step=float(align.get('orientation_step_deg',45))
+    if step not in (45,90):raise ValueError('Main-structure orientation step must be 45 or 90 degrees')
+    rotation = -((angle+step/2)%step-step/2)
     if abs(rotation)<1e-8: rotation=0.0
     return {"rotation_deg": rotation, "primary_structure": primary,
             "source_edge_deg": angle, "aligned_edge_deg": angle+rotation,
@@ -327,6 +380,8 @@ def layout_for(scene, manifest, elements):
         if not box.contains(area): raise ValueError("Map box is outside physical canvas")
         pts = [rotated(p) for el in elements if el["role"] not in ("north","leader")
                for commands in el["paths"] for p in vertices(commands)]
+        for road in scene.get('roads',[]):
+            pts.extend(cardinal_road_points([rotated(p) for p in road.get('points',[])]))
         b = bounds(pts)
         if b[2]==b[0] or b[3]==b[1]: raise ValueError("Map has zero width or height")
         # Reserve half of the largest stroke at every map-box edge.
@@ -351,18 +406,549 @@ def transform_commands(commands, transform):
     return [[cmd[0], *[v for j in range(1,len(cmd),2) for v in transform(cmd[j:j+2])]] for cmd in commands]
 
 
-def draw_elements(elements, transform, color, warnings, box):
+def closed_polygons(paths, element_id):
+    """Split explicit straight closed module outlines; never infer a grid."""
+    polygons, points = [], []
+    def finish():
+        nonlocal points
+        if len(points)>1 and math.dist(points[0],points[-1])<1e-6:
+            points.pop()
+        if len(points)<3:
+            raise ValueError(f'{element_id}: solar modules need individual closed outlines for production clearance')
+        clean = []
+        for p in points:
+            if not clean or math.dist(clean[-1],p)>1e-6: clean.append(p)
+        polygons.append(clean)
+        points=[]
+    for path in paths:
+        for cmd in path:
+            if cmd[0]=='M':
+                if points:
+                    if len(points)>2 and math.dist(points[0],points[-1])<1e-6: finish()
+                    else: raise ValueError(f'{element_id}: split solar grid lines into source-confirmed individual modules')
+                points=[tuple(cmd[1:])]
+            elif cmd[0]=='L': points.append(tuple(cmd[1:]))
+            elif cmd[0]=='Z': finish()
+            else: raise ValueError(f'{element_id}: curved solar artwork needs source-confirmed individual module outlines')
+        if points:
+            if len(points)>2 and math.dist(points[0],points[-1])<1e-6: finish()
+            else: raise ValueError(f'{element_id}: split solar grid lines into source-confirmed individual modules')
+    return polygons
+
+
+def cross(a,b):
+    return a[0]*b[1]-a[1]*b[0]
+
+
+def polygon_area(points):
+    return sum(cross(a,b) for a,b in zip(points,points[1:]+points[:1]))/2
+
+
+def inset_polygon(points, inset):
+    """Parallel inward offsets of a convex module, in physical output points."""
+    orientation=1 if polygon_area(points)>0 else -1
+    edges=[]
+    for a,b in zip(points,points[1:]+points[:1]):
+        dx,dy=b[0]-a[0],b[1]-a[1]
+        length=math.hypot(dx,dy)
+        if length<1e-6: raise ValueError('Degenerate solar outline')
+        normal=(-dy/length*orientation,dx/length*orientation)
+        if any((p[0]-a[0])*normal[0]+(p[1]-a[1])*normal[1]<-1e-5 for p in points):
+            raise ValueError('Solar module outline must be convex; verify individual module boundaries')
+        edges.append((a,normal))
+    result=list(points)
+    offsets=[inset]*len(edges) if isinstance(inset,(int,float)) else inset
+    if len(offsets)!=len(edges): raise ValueError('One solar inset is required per edge')
+    for (origin,normal),distance in zip(edges,offsets):
+        clipped=[]
+        for a,b in zip(result,result[1:]+result[:1]):
+            da=(a[0]-origin[0])*normal[0]+(a[1]-origin[1])*normal[1]-distance
+            db=(b[0]-origin[0])*normal[0]+(b[1]-origin[1])*normal[1]-distance
+            if da>=-1e-8: clipped.append(a)
+            if (da>0) != (db>0):
+                t=da/(da-db)
+                clipped.append((a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])))
+        result=clipped
+        if len(result)<3: raise ValueError('Solar panel is too small for production clearance; increase the map scale')
+    # Reject offset collapse / excessive shrink rather than remove or distort modules.
+    if abs(polygon_area(result))<abs(polygon_area(points))*.20:
+        raise ValueError('Solar panel would shrink excessively; increase the map scale or review its boundaries')
+    for _,normal in edges:
+        positions=[p[0]*normal[0]+p[1]*normal[1] for p in result]
+        # The 1 pt clearance rule applies to panel/roof edges. Inside a tiny
+        # module, require a visible opening without inventing a second 1 pt
+        # rule that forces source arrays into an unsolicited enlarged detail.
+        if max(positions)-min(positions)<ROLES['solar']+.25:
+            raise ValueError('Solar panel is too narrow to keep its own strokes apart; increase the map scale')
+    return result
+
+
+def point_segment_distance(p,a,b):
+    dx,dy=b[0]-a[0],b[1]-a[1]
+    t=max(0,min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/(dx*dx+dy*dy))) if dx or dy else 0
+    return math.dist(p,(a[0]+t*dx,a[1]+t*dy))
+
+
+def segments_distance(a,b,c,d):
+    ab=(b[0]-a[0],b[1]-a[1]); cd=(d[0]-c[0],d[1]-c[1])
+    den=cross(ab,cd)
+    if abs(den)>1e-10:
+        ac=(c[0]-a[0],c[1]-a[1])
+        t,u=cross(ac,cd)/den,cross(ac,ab)/den
+        if 0<=t<=1 and 0<=u<=1: return 0.0
+    return min(point_segment_distance(a,c,d),point_segment_distance(b,c,d),
+               point_segment_distance(c,a,b),point_segment_distance(d,a,b))
+
+
+def inside_polygon(p,polygon):
+    orientation=1 if polygon_area(polygon)>0 else -1
+    return all(orientation*cross((b[0]-a[0],b[1]-a[1]),(p[0]-a[0],p[1]-a[1]))>=-1e-8
+               for a,b in zip(polygon,polygon[1:]+polygon[:1]))
+
+
+def polygon_segment_distance(polygon,a,b):
+    if inside_polygon(a,polygon) or inside_polygon(b,polygon): return 0.0
+    return min(segments_distance(c,d,a,b) for c,d in zip(polygon,polygon[1:]+polygon[:1]))
+
+
+def polygon_distance(a,b):
+    if inside_polygon(a[0],b) or inside_polygon(b[0],a): return 0.0
+    return min(polygon_segment_distance(a,c,d) for c,d in zip(b,b[1:]+b[:1]))
+
+
+def clearance_edges(paths):
+    """Flatten roof curves for distance checks only, within 0.02 output pt."""
+    result=[]
+    def curve(a,b,c,d,depth=0):
+        if depth>=16 or max(point_segment_distance(b,a,d),point_segment_distance(c,a,d))<.02:
+            if math.dist(a,d)>1e-8: result.append((a,d))
+            return
+        midpoint=lambda p,q:((p[0]+q[0])/2,(p[1]+q[1])/2)
+        ab,bc,cd=midpoint(a,b),midpoint(b,c),midpoint(c,d)
+        abc,bcd=midpoint(ab,bc),midpoint(bc,cd)
+        center=midpoint(abc,bcd)
+        curve(a,ab,abc,center,depth+1); curve(center,bcd,cd,d,depth+1)
+    for path in paths:
+        first=previous=None
+        for cmd in path:
+            if cmd[0]=='M': first=previous=tuple(cmd[1:])
+            elif cmd[0]=='L':
+                end=tuple(cmd[1:])
+                if previous is not None and math.dist(previous,end)>1e-8: result.append((previous,end))
+                previous=end
+            elif cmd[0]=='C':
+                curve(previous,tuple(cmd[1:3]),tuple(cmd[3:5]),tuple(cmd[5:7]))
+                previous=tuple(cmd[5:7])
+            elif cmd[0]=='Z':
+                if math.dist(previous,first)>1e-8: result.append((previous,first))
+                previous=first
+    return result
+
+
+def uniform_rooftop_modules(modules, mapped, roof_edges, gap):
+    """One physical short/long size per map, with centers and bearings retained."""
+    footprints=[]
+    for el in mapped:
+        if el['role']!='building':continue
+        try:footprints.extend(closed_polygons(el['paths'],el['id']))
+        except ValueError:pass
+    rooftop=[]
+    for m in modules:
+        el=mapped[m['element']];poly=m['original'];center=tuple(sum(p[j] for p in poly)/len(poly) for j in (0,1))
+        surface=el.get('mount_surface')
+        if surface not in (None,'roof','ground'):raise ValueError('Solar mount_surface must be roof or ground')
+        if surface=='ground' or (surface is None and not any(inside_polygon(center,p) for p in footprints)):continue
+        if len(poly)!=4:raise ValueError('Rooftop modules need four reviewed corners for common rectangular sizing')
+        edges=[(math.dist(a,b),a,b) for a,b in zip(poly,poly[1:]+poly[:1])]
+        longest,a,b=max(edges,key=lambda q:q[0]);u=tuple((b[j]-a[j])/longest for j in (0,1))
+        m.update(rooftop=True,center=center,axis=u)
+        m['short']=min(q[0] for q in edges);m['long']=longest;rooftop.append(m)
+    if not rooftop:return None
+    short=statistics.median(m['short'] for m in rooftop);long=statistics.median(m['long'] for m in rooftop)
+    def polygons(scale):
+        result=[]
+        for m in rooftop:
+            u=m['axis'];v=(-u[1],u[0]);c=m['center']
+            result.append([(c[0]+u[0]*x+v[0]*y,c[1]+u[1]*x+v[1]*y)
+                           for x,y in ((-long*scale/2,-short*scale/2),(long*scale/2,-short*scale/2),
+                                       (long*scale/2,short*scale/2),(-long*scale/2,short*scale/2))])
+        return result
+    def interiors_overlap(a,b):
+        for poly in (a,b):
+            for c,d in zip(poly,poly[1:]+poly[:1]):
+                n=(-(d[1]-c[1]),d[0]-c[0]);pa=[sum(p[j]*n[j] for j in (0,1)) for p in a];pb=[sum(p[j]*n[j] for j in (0,1)) for p in b]
+                if min(max(pa),max(pb))-max(min(pa),min(pb))<=1e-7:return False
+        return True
+    def valid(polys):
+        for i,p in enumerate(polys):
+            if any(polygon_segment_distance(p,a,b)<gap+ROLES['solar']/2+r-1e-7 for a,b,r in roof_edges):return False
+            bb=bounds(p)
+            for q in polys[:i]:
+                qb=bounds(q)
+                if bb[0]>qb[2]+1.5 or qb[0]>bb[2]+1.5 or bb[1]>qb[3]+1.5 or qb[1]>bb[3]+1.5:continue
+                distance=polygon_distance(p,q)
+                # Exact shared borders/corners are valid. Close parallel double
+                # strokes and overlapping module interiors are not.
+                if distance<1e-6 and not interiors_overlap(p,q):continue
+                if distance<ROLES['solar']+.25-1e-7:return False
+        return True
+    scale=1.0;polys=polygons(scale)
+    if not valid(polys):
+        low=max((ROLES['solar']+.25)/short,(ROLES['solar']+.25)/long,
+                max(math.sqrt(abs(polygon_area(m['original']))*.20/(short*long)) for m in rooftop))
+        if low>=1 or not valid(polygons(low)):
+            raise ValueError('Uniform rooftop panel size cannot clear roof/neighbor strokes; review placement or increase map scale')
+        high=1.0
+        for _ in range(34):
+            mid=(low+high)/2
+            if valid(polygons(mid)):low=mid
+            else:high=mid
+        scale=low;polys=polygons(scale)
+    for m,p in zip(rooftop,polys):m['polygon']=p
+    return {'module_count':len(rooftop),'short_long_size_pt':[short*scale,long*scale],
+            'common_scale':scale,'centers_preserved':True,'stroke_pt':ROLES['solar']}
+
+
+def production_elements(elements, transform, settings=None):
+    """Keep source evidence untouched; inset only final individual solar outlines."""
+    settings=settings or {}
+    gap=float(settings.get('roof_gap_pt',settings.get('panel_gap_pt',1)))
+    if not math.isfinite(gap) or gap<=0: raise ValueError('Production panel gap must be positive')
+    mapped=[{**el,'paths':[transform_commands(p,transform) for p in el['paths']]} for el in elements]
+    for el in mapped:
+        if el['role']=='solar_field' and not el.get('representation_evidence'):
+            raise ValueError(f"{el['id']}: solar_field needs representation_evidence confirming schematic rows or array footprints")
+    roof_edges=[]
+    for el in mapped:
+        if el['role'] in ('building','roof','wall'):
+            curved=any(c[0]=='C' for p in el['paths'] for c in p)
+            roof_edges.extend((a,b,ROLES[el['role']]/2+(.02 if curved else 0)) for a,b in clearance_edges(el['paths']))
+    modules=[]
+    for ei,el in enumerate(mapped):
+        if el['role']!='solar': continue
+        for poly in closed_polygons(el['paths'],el['id']):
+            modules.append({'element':ei,'original':poly,'inset':[0.0]*len(poly)})
+    rooftop=uniform_rooftop_modules(modules,mapped,roof_edges,gap)
+    # Adjacent panels may share edges. Inset only edges threatened by roof/wall
+    # strokes; untouched source grid divisions stay in their original positions.
+    for attempt in range(24):
+        for m in modules:
+            if m.get('rooftop'):continue
+            try: m['polygon']=inset_polygon(m['original'],m['inset'])
+            except ValueError as exc: raise ValueError(f"{mapped[m['element']]['id']}: {exc}") from exc
+        extra=[[0.0]*len(m['original']) for m in modules]
+        for i,m in enumerate(modules):
+            if m.get('rooftop'):continue
+            for a,b,radius in roof_edges:
+                deficit=gap+ROLES['solar']/2+radius-polygon_segment_distance(m['polygon'],a,b)
+                if deficit>1e-5:
+                    edges=list(zip(m['original'],m['original'][1:]+m['original'][:1]))
+                    parallel=[j for j,(c,d) in enumerate(edges)
+                              if abs(cross((d[0]-c[0],d[1]-c[1]),(b[0]-a[0],b[1]-a[1])))
+                              <1e-5*math.dist(c,d)*math.dist(a,b)]
+                    choices=parallel or list(range(len(edges)))
+                    distances={j:segments_distance(*edges[j],a,b) for j in choices}
+                    nearest=min(distances.values())
+                    for j in choices:
+                        if distances[j]<=nearest+1e-5: extra[i][j]=max(extra[i][j],deficit+.01)
+        if not any(any(edge) for edge in extra): break
+        for m,delta in zip(modules,extra): m['inset']=[x+y for x,y in zip(m['inset'],delta)]
+    else: raise ValueError('Solar production clearances remain unresolved; review module boundaries and roof crossings')
+    for el in mapped:
+        if el['role']=='solar': el['paths']=[]
+    for m in modules:
+        p=m['polygon']
+        mapped[m['element']]['paths'].append([['M',*p[0]],*[['L',*v] for v in p[1:]],['Z']])
+    for el in mapped:
+        if el.get('dash_pt') is not None:
+            if el.get('solid') or el['role'] in ('solar','equipment'):
+                raise ValueError('Dashes belong on reviewed context/feature boundaries or schematic field rows, not equipment or individual modules')
+            el['paths']=[dash_commands(p,el['dash_pt'],el.get('dash_phase_pt',0)) for p in el['paths']]
+        if el['role']=='solar_field':
+            for a,b in clearance_edges(el['paths']):
+                if any(segments_distance(a,b,c,d)<gap+ROLES['solar_field']/2+radius-1e-5
+                       for c,d,radius in roof_edges):
+                    raise ValueError(f"{el['id']}: schematic array strokes need reviewed roof clearance; do not substitute invented modules")
+    return mapped, {'gap_pt':gap,'roof_gap_pt':gap,'panel_to_panel_gap_required':False,
+                    'module_count':len(modules),'module_insets_pt':[m['inset'] for m in modules],
+                    'uniform_rooftop':rooftop,
+                    'schematic_field_elements':sum(el['role']=='solar_field' for el in mapped)}
+
+
+def dash_commands(commands, pattern, phase=0):
+    """Bake physical dash gaps into loose vectors; no masks or phase-reset exports."""
+    if not isinstance(pattern,(list,tuple)) or not pattern:
+        raise ValueError('dash_pt must be a nonempty list of positive physical lengths')
+    pattern=list(map(float,pattern)); phase=float(phase)
+    if not all(math.isfinite(v) and v>0 for v in pattern) or not math.isfinite(phase):
+        raise ValueError('Invalid physical dash pattern or phase')
+    if len(pattern)%2: pattern*=2
+    output=[]; previous=first=None; pen=False
+    for command in commands:
+        if command[0]=='M':
+            first=previous=tuple(command[1:]); pen=False; index=0
+            offset=phase%sum(pattern)
+            while offset>=pattern[index]: offset-=pattern[index]; index=(index+1)%len(pattern)
+            remaining=pattern[index]-offset
+            continue
+        if command[0] not in ('L','Z'):
+            raise ValueError('Curved dashed boundaries need reviewed straight trace segments')
+        end=first if command[0]=='Z' else tuple(command[1:])
+        length=math.dist(previous,end); progress=0.0
+        if length<1e-9: continue
+        while progress<length-1e-9:
+            step=min(remaining,length-progress)
+            a=tuple(previous[j]+(end[j]-previous[j])*progress/length for j in (0,1))
+            b=tuple(previous[j]+(end[j]-previous[j])*(progress+step)/length for j in (0,1))
+            if index%2==0:
+                if not pen: output.append(['M',*a])
+                output.append(['L',*b]); pen=True
+            else: pen=False
+            remaining-=step; progress+=step
+            if remaining<1e-9:
+                index=(index+1)%len(pattern); remaining=pattern[index]
+                if index%2: pen=False
+        previous=end
+    return output
+
+
+def normalize_equipment(elements, transform):
+    """Replace customer symbols with plain 1.5 pt rectangles touching wall ink."""
+    if not any(el['role']=='equipment' for el in elements): return elements,[]
+    reports=[]
+    walls=[]
+    for el in elements:
+        if el['role'] not in ('building','wall'): continue
+        try: polygons=closed_polygons(el['paths'],el['id'])
+        except ValueError:
+            # Cropped site maps may show only part of a house. Preserve its open
+            # outline and require a confirmed segment plus explicit face vector.
+            for a,b in line_segments(el['paths']):
+                length=math.dist(a,b); u=((b[0]-a[0])/length,(b[1]-a[1])/length)
+                walls.append({'structure':el.get('structure_id',el['id']),'a':a,'b':b,'u':u,
+                              'inward':None,'polygon':None})
+            continue
+        for poly in polygons:
+            orientation=1 if polygon_area(poly)>0 else -1
+            for a,b in zip(poly,poly[1:]+poly[:1]):
+                length=math.dist(a,b)
+                if length<1e-6: continue
+                u=((b[0]-a[0])/length,(b[1]-a[1])/length)
+                walls.append({'structure':el.get('structure_id',el['id']),'a':a,'b':b,'u':u,
+                              'inward':(-u[1]*orientation,u[0]*orientation),'polygon':poly})
+    result=[]
+    for el in elements:
+        if el['role']!='equipment': result.append(el); continue
+        bb=bounds([p for path in el['paths'] for p in vertices(path)])
+        original=((bb[0]+bb[2])/2,(bb[1]+bb[3])/2)
+        width,depth=map(float,el.get('box_size_pt',[12,10]))
+        if not all(math.isfinite(v) and v>0 for v in (width,depth)): raise ValueError('Invalid equipment rectangle size')
+        if el.get('mount_side')=='freestanding':
+            angle=float(el.get('box_rotation_deg',0))
+            if not math.isfinite(angle): raise ValueError('Invalid freestanding equipment rotation')
+            rad=math.radians(angle); origin=transform((0,0)); axis=transform((math.cos(rad),math.sin(rad)))
+            length=math.dist(origin,axis); u=tuple((axis[j]-origin[j])/length for j in (0,1)); normal=(-u[1],u[0])
+            poly=[(original[0]+u[0]*v+normal[0]*d,original[1]+u[1]*v+normal[1]*d)
+                  for v,d in ((-width/2,-depth/2),(width/2,-depth/2),(width/2,depth/2),(-width/2,depth/2))]
+            result.append({**el,'solid':False,'production_equipment':True,
+                           'paths':[[['M',*poly[0]],*[['L',*p] for p in poly[1:]],['Z']]]})
+            reports.append({'id':el['id'],'source_output_bounds':bb,'source_output_center':original,
+                            'output_center':original,'wall_contact':None,'wall_segment':None,
+                            'mount_side':'freestanding','structure':None,'size_pt':[width,depth]})
+            continue
+        if not walls: raise ValueError(f"{el['id']}: equipment needs a confirmed exterior building wall")
+        choices=[wall for wall in walls if not el.get('mount_structure') or wall['structure']==el['mount_structure']]
+        if el.get('wall_segment'):
+            a,b=[transform(p) for p in el['wall_segment']]
+            choices=[wall for wall in choices if point_segment_distance(a,wall['a'],wall['b'])<1e-4
+                     and point_segment_distance(b,wall['a'],wall['b'])<1e-4]
+        if not choices: raise ValueError(f"{el['id']}: confirmed equipment wall is not on the building perimeter")
+        wall=min(choices,key=lambda item:point_segment_distance(original,item['a'],item['b']))
+        side=el.get('mount_side')
+        inward=wall['inward']
+        if inward is None:
+            if not el.get('wall_segment') or side not in ('inside','outside') or not el.get('wall_inward'):
+                raise ValueError(f"{el['id']}: open perimeter requires wall_segment, mount_side and source-confirmed wall_inward")
+            raw=el['wall_inward']
+            if len(raw)!=2 or not all(math.isfinite(float(v)) for v in raw): raise ValueError('Invalid wall_inward vector')
+            origin=transform((0,0)); end=transform(raw); length=math.dist(origin,end)
+            if length<1e-8: raise ValueError('wall_inward must be a nonzero source-coordinate vector')
+            inward=tuple((end[j]-origin[j])/length for j in (0,1))
+            if abs(sum(inward[j]*wall['u'][j] for j in (0,1)))>1e-5:
+                raise ValueError('wall_inward must be perpendicular to the confirmed wall')
+        if side is None:
+            # Ray crossing works for stepped/concave building footprints too.
+            x,y=original; inside=False; poly=wall['polygon']
+            for a,b in zip(poly,poly[1:]+poly[:1]):
+                if (a[1]>y)!=(b[1]>y) and x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0]: inside=not inside
+            side='inside' if inside else 'outside'
+        if side not in ('inside','outside'): raise ValueError('Equipment mount_side must be inside or outside')
+        a,b,u=wall['a'],wall['b'],wall['u']
+        length=math.dist(a,b)
+        if length<width: raise ValueError(f"{el['id']}: equipment box is too wide for the selected wall segment")
+        along=max(width/2,min(length-width/2,(original[0]-a[0])*u[0]+(original[1]-a[1])*u[1]))
+        contact=(a[0]+along*u[0],a[1]+along*u[1])
+        sign=1 if side=='inside' else -1
+        normal=tuple(sign*v for v in inward)
+        # The mounting edge is directly on the wall centerline. Its intentional
+        # 1.5 pt / 2 pt overlap is the user's sole duplicate-edge exception.
+        offset=0.0
+        near=(contact[0]+normal[0]*offset,contact[1]+normal[1]*offset)
+        poly=[(near[0]+u[0]*v+normal[0]*d,near[1]+u[1]*v+normal[1]*d)
+              for v,d in ((-width/2,0),(width/2,0),(width/2,depth),(-width/2,depth))]
+        center=(near[0]+normal[0]*depth/2,near[1]+normal[1]*depth/2)
+        result.append({**el,'solid':False,'production_equipment':True,
+                       'paths':[[['M',*poly[0]],*[['L',*p] for p in poly[1:]],['Z']]]})
+        reports.append({'id':el['id'],'source_output_bounds':bb,'source_output_center':original,
+                        'output_center':center,'wall_contact':contact,'wall_segment':[a,b],
+                        'mount_side':side,'structure':wall['structure'],'size_pt':[width,depth]})
+    return result,reports
+
+
+def layout_callouts(labels, groups=None):
+    """Explicit nearby equipment groups share a margin and block-to-block gap."""
+    labels=[dict(label) for label in labels]
+    members={}
+    for i,label in enumerate(labels):
+        if label.get('group'): members.setdefault(label['group'],[]).append(i)
+    for name,indices in members.items():
+        spec=(groups or {}).get(name,{})
+        anchor=spec.get('anchor','start')
+        if anchor not in ('start','end'): raise ValueError('Callout groups need a start or end margin')
+        gap=float(spec.get('gap_pt',6))
+        if not math.isfinite(gap) or gap<0: raise ValueError('Invalid callout text gap')
+        indices.sort(key=lambda i:labels[i]['y'])
+        boxes=[text_box(labels[i])[3] for i in indices]
+        margin=float(spec.get('margin_x',min(b[0] for b in boxes) if anchor=='start' else max(b[2] for b in boxes)))
+        top=float(spec.get('top',boxes[0][1]))
+        for i in indices:
+            label=labels[i]
+            _,size,_,_=text_box(label)
+            label.update(x=margin,y=top+size,anchor=anchor)
+            top=text_box(label)[3][3]+gap
+    return labels
+
+
+def square_route(start, via, target, side, allow_45=False, final_axis=None):
+    """Insert elbows at odd bearings; never move the target or label."""
+    route=[start]
+    waypoints=[*via,target]
+    for index,end in enumerate(waypoints):
+        previous=route[-1]
+        dx,dy=end[0]-previous[0],end[1]-previous[1]
+        if abs(dx)<1e-7 and abs(dy)<1e-7: continue
+        diagonal=allow_45 and abs(abs(dx)-abs(dy))<1e-6
+        if abs(dx)>1e-7 and abs(dy)>1e-7 and not diagonal:
+            horizontal=side in ('left','right') if len(route)==1 else abs(route[-1][1]-route[-2][1])>1e-7
+            if index==len(waypoints)-1 and final_axis:
+                horizontal=final_axis=='vertical'
+            route.append((end[0],previous[1]) if horizontal else (previous[0],end[1]))
+        route.append(tuple(end))
+    # Remove forward collinear vertices without deleting intentional reversals.
+    clean=[]
+    for p in route:
+        while len(clean)>1:
+            a,b=clean[-2:]; u=(b[0]-a[0],b[1]-a[1]); v=(p[0]-b[0],p[1]-b[1])
+            if abs(cross(u,v))<1e-7 and u[0]*v[0]+u[1]*v[1]>=0: clean.pop()
+            else: break
+        clean.append(p)
+    return clean
+
+
+def clear_commands(commands, voids, padding=0, preserve_edges=()):
+    """Trim stroked vectors out of equipment interiors, without white fills.
+
+    Keep untouched primitives exact; subdivide only a Bezier near a cut edge.
+    This also works in SVG renderers that ignore clipPath.
+    """
+    if not voids: return commands
+    def inside(p,poly):
+        sign=1 if polygon_area(poly)>0 else -1
+        return all(sign*cross((b[0]-a[0],b[1]-a[1]),(p[0]-a[0],p[1]-a[1]))/math.dist(a,b)>=-padding-1e-8
+                   for a,b in zip(poly,poly[1:]+poly[:1]))
+    def intervals(a,b):
+        result=[(0.0,1.0)]
+        for index,poly in enumerate(voids):
+            if index<len(preserve_edges) and preserve_edges[index]:
+                c,d=preserve_edges[index]
+                if abs(cross((d[0]-c[0],d[1]-c[1]),(a[0]-c[0],a[1]-c[1])))<1e-5*math.dist(c,d) and \
+                   abs(cross((d[0]-c[0],d[1]-c[1]),(b[0]-c[0],b[1]-c[1])))<1e-5*math.dist(c,d):
+                    continue
+            lo,hi=0.0,1.0; sign=1 if polygon_area(poly)>0 else -1
+            for c,d in zip(poly,poly[1:]+poly[:1]):
+                edge=(d[0]-c[0],d[1]-c[1]); length=math.dist(c,d)
+                da=sign*cross(edge,(a[0]-c[0],a[1]-c[1]))/length+padding
+                db=sign*cross(edge,(b[0]-c[0],b[1]-c[1]))/length+padding
+                if da<0 and db<0: lo,hi=1,0; break
+                if (da<0)!=(db<0):
+                    t=da/(da-db)
+                    if da<0: lo=max(lo,t)
+                    else: hi=min(hi,t)
+            if lo>hi: continue
+            remaining=[]
+            for p,q in result:
+                if hi<=p or lo>=q: remaining.append((p,q)); continue
+                if p<lo: remaining.append((p,lo))
+                if hi<q: remaining.append((hi,q))
+            result=remaining
+        return result
+    def line(a,b):
+        return [(tuple(a[j]+t*(b[j]-a[j]) for j in (0,1)),
+                 ['L',*[a[j]+u*(b[j]-a[j]) for j in (0,1)]])
+                for t,u in intervals(a,b) if u-t>1e-8]
+    def curve(a,b,c,d,depth=0):
+        bb=bounds([a,b,c,d])
+        if not any(intersects([bb[0]-padding,bb[1]-padding,bb[2]+padding,bb[3]+padding],bounds(poly)) for poly in voids):
+            return [(a,['C',*b,*c,*d])]
+        if any(all(inside(p,poly) for p in (a,b,c,d)) for poly in voids): return []
+        if depth>=14 or max(point_segment_distance(b,a,d),point_segment_distance(c,a,d))<.02:
+            return line(a,d)
+        mid=lambda p,q:tuple((p[j]+q[j])/2 for j in (0,1))
+        ab,bc,cd=mid(a,b),mid(b,c),mid(c,d)
+        abc,bcd=mid(ab,bc),mid(bc,cd); center=mid(abc,bcd)
+        return curve(a,ab,abc,center,depth+1)+curve(center,bcd,cd,d,depth+1)
+    paths=[]; current=[]
+    for cmd in commands:
+        if cmd[0]=='M' and current: paths.append(current); current=[]
+        current.append(cmd)
+    if current: paths.append(current)
+    output=[]
+    for path in paths:
+        pieces=[]; changed=False; first=previous=None
+        for cmd in path:
+            if cmd[0]=='M': first=previous=tuple(cmd[1:]); continue
+            end=first if cmd[0]=='Z' else tuple(cmd[-2:])
+            part=curve(previous,tuple(cmd[1:3]),tuple(cmd[3:5]),end) if cmd[0]=='C' else line(previous,end)
+            expected=['L',*end] if cmd[0]=='Z' else cmd
+            if len(part)!=1 or math.dist(part[0][0],previous)>1e-7 or part[0][1]!=expected: changed=True
+            pieces.extend(part); previous=end
+        if not changed: output.extend(path); continue
+        if path[-1][0]=='Z' and pieces:
+            for i in range(len(pieces)):
+                if math.dist(pieces[i-1][1][-2:],pieces[i][0])>1e-6:
+                    pieces=pieces[i:]+pieces[:i]; break
+        end=None
+        for start,cmd in pieces:
+            if end is None or math.dist(end,start)>1e-6: output.append(['M',*start])
+            output.append(cmd); end=cmd[-2:]
+    return output
+
+
+def draw_elements(elements, transform, color, warnings, box, voids=(), mount_edges=()):
     body=[]
     for el in elements:
         role=el["role"]
         content=[]
         for commands in el["paths"]:
             mapped=transform_commands(commands,transform)
+            mapped=clear_commands(mapped,voids,ROLES[role]/2,mount_edges if role in ('building','wall') else ())
+            if not mapped: continue
             if any(not (box.x0<=x<=box.x1 and box.y0<=y<=box.y1) for x,y in vertices(mapped)):
                 warnings.append(f'{el["id"]} has coordinates outside output viewport')
-            fill=color if el.get("solid",False) else "none"
+            fill='none' if el.get('production_equipment') else color if el.get("solid",False) else "none"
             content.append(f'<path d="{path_d(mapped)}" fill="{fill}" stroke="{color}" stroke-width="{n(ROLES[role])}" stroke-linejoin="miter" stroke-linecap="butt"/>')
-        body.append(f'<g id="{html.escape(el["id"],quote=True)}" data-role="{role}">{"".join(content)}</g>')
+        mount=f' data-mount-side="{el.get("mount_side", "wall")}"' if role=='equipment' else ''
+        body.append(f'<g id="{html.escape(el["id"],quote=True)}" data-role="{role}"{mount}>{"".join(content)}</g>')
     return "".join(body)
 
 
@@ -372,7 +958,9 @@ def text_box(label):
     lines=label["text"] if isinstance(label["text"],list) else [label["text"]]
     if not lines or not all(isinstance(line,str) and line for line in lines): raise ValueError("Empty label")
     font=fitz.Font("helv")
-    width=max(font.text_length(line,fontsize=size) for line in lines)
+    stretch=float(label.get('width_scale',1))
+    if not math.isfinite(stretch) or stretch<=0:raise ValueError('Invalid text width scale')
+    width=max(font.text_length(line,fontsize=size) for line in lines)*stretch
     anchor=label.get("anchor","start")
     if anchor not in ("start","middle","end"): raise ValueError("Invalid label anchor")
     x,y=float(label["x"]),float(label["y"])
@@ -408,31 +996,36 @@ def arrow_obstacles(elements, transform):
 
 
 def arrow_setback(target, ux, uy, gap, depth, half_width, obstacles):
-    """Keep the whole head envelope at least 2 pt from nearby stroked edges."""
-    blocked = []
+    """Clear the actual triangular head envelope, not an oversized rectangle.
+
+    A rectangle spanning every wing along the full head length falsely blocks
+    heads beside sloping walls and crowded symbols, forcing needless reroutes.
+    Broad intervals cheaply select obstacles; exact distances decide clearance.
+    """
+    possible=[]
     for points, radius in obstacles:
         pad = radius + 2
-        lateral = half_width + pad
         local = [((target[0]-x)*ux + (target[1]-y)*uy,
                   (y-target[1])*ux - (x-target[0])*uy) for x, y in points]
-        if max(y for _, y in local) < -lateral or min(y for _, y in local) > lateral:
+        if max(y for _,y in local)<-half_width-pad or min(y for _,y in local)>half_width+pad:
             continue
-        if len(local) == 2:
-            # Restrict a straight edge to the strip occupied by the head.
-            (a, v), (b, w) = local
-            if v != w:
-                t0, t1 = sorted(((-lateral-v)/(w-v), (lateral-v)/(w-v)))
-                local = [(a+(b-a)*max(0, t0), 0), (a+(b-a)*min(1, t1), 0)]
-        low, high = sorted((min(x for x, _ in local), max(x for x, _ in local)))
-        blocked.append((low-depth-pad, high+pad))
-    for low, high in sorted(blocked):
-        if low <= gap <= high:
-            gap = high + 0.05
-    return gap
+        low=min(x for x,y in local)-depth-pad;high=max(x for x,y in local)+pad
+        possible.append((low,high,local,pad))
+    for _ in range(4096):
+        head=[(gap,0),(gap+depth,half_width),(gap+depth,-half_width)]
+        collision=False
+        for lo,hi,points,pad in possible:
+            if not lo<=gap<=hi:continue
+            distance=polygon_segment_distance(head,*points) if len(points)==2 else polygon_distance(head,points)
+            if distance<pad-1e-7:collision=True;break
+        if not collision:return gap
+        gap+=.25
+    raise ValueError('Arrowhead has no clear approach; choose another route')
 
 
-def draw_callouts(labels, transform, color, box, warnings, obstacles=()):
+def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipment_targets=None, voids=(), array_targets=None):
     leaders,texts,boxes,targets=[],[],[],[]
+    head_envelopes=[];shaft_routes=[]
     arrow=read_json(Path(__file__).resolve().parents[1]/"assets/leader-arrow-2.json")
     arrow_scale=ROLES["leader"]/arrow["reference_stroke_pt"]
     shaft_inset=arrow["shaft_stop_before_tip"]*arrow_scale
@@ -447,6 +1040,10 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=()):
         boxes.append(bbox)
         if "target" in label:
             target=transform(label["target"])
+            if label.get('target_element'):
+                if label['target_element'] not in (equipment_targets or {}):
+                    raise ValueError('Callout target_element must identify a production equipment rectangle')
+                target=equipment_targets[label['target_element']]
             side=label.get("side","right" if target[0]>(bbox[0]+bbox[2])/2 else "left")
             if side not in ("left","right","top","bottom"): raise ValueError("Invalid leader side")
             start={"left":(bbox[0]-4,(bbox[1]+bbox[3])/2),"right":(bbox[2]+4,(bbox[1]+bbox[3])/2),
@@ -456,34 +1053,86 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=()):
                 if "elbow_x" in label: via=[(label["elbow_x"],start[1]),(label["elbow_x"],target[1])]
                 elif "elbow_y" in label: via=[(start[0],label["elbow_y"]),(target[0],label["elbow_y"])]
                 else: via=[(target[0],start[1])]
-            route=[start,*via,target]
-            # Drop coincident points before choosing the final approach vector.
-            route=[p for i,p in enumerate(route) if i==0 or math.dist(p,route[i-1])>1e-6]
-            if len(route)<2: raise ValueError("Leader has no length")
-            prev=route[-2]; length=math.dist(prev,target)
-            ux,uy=(target[0]-prev[0])/length,(target[1]-prev[1])/length
-            gap=float(label.get("target_gap_pt",3))
-            if not math.isfinite(gap): raise ValueError("Invalid arrow gap")
-            gap=arrow_setback(target,ux,uy,max(3,gap),head_depth,head_half_width,obstacles)
-            if length<=gap+shaft_inset:
-                raise ValueError(f'Extend the final leader segment for {" ".join(lines)} to leave space at its arrowhead')
+            requested_gap=float(label.get("target_gap_pt",3))
+            if not math.isfinite(requested_gap): raise ValueError("Invalid arrow gap")
+            candidates=[square_route(start,via,target,side,label.get('allow_45',False),axis)
+                        for axis in (None,'horizontal','vertical')]
+            if label.get('via') is None and 'elbow_x' not in label and 'elbow_y' not in label:
+                candidates.append(square_route(start,[(start[0],target[1])],target,side))
+            # A flush box can make a wall-parallel head approach too crowded.
+            # Try a perpendicular approach before asking for a revised label.
+            candidates.extend([square_route(start,[(target[0],start[1])],target,side),
+                               square_route(start,[(start[0],target[1])],target,side)])
+            if side in ('left','right'):
+                # A side-attached label needs a visible horizontal tail. Do not
+                # let an almost aligned target collapse it to a vertical line
+                # beside the last letter, as in the user's rejected example.
+                direction=-1 if side=='left' else 1
+                candidates=[route for route in candidates if len(route)>1
+                            and abs(route[1][1]-start[1])<1e-6
+                            and direction*(route[1][0]-start[0])>=6-1e-6]
+                tail=(start[0]+direction*6,start[1])
+                middle=(start[1]+target[1])/2
+                candidates.append([start,tail,(tail[0],middle),(target[0],middle),target])
+            valid=False
+            for route in candidates:
+                if len(route)<2: continue
+                prev=route[-2]; length=math.dist(prev,target)
+                if length<1e-7:continue
+                ux,uy=(target[0]-prev[0])/length,(target[1]-prev[1])/length
+                if any(math.dist(a,b)<4-1e-6 for a,b in zip(route[1:-2],route[2:-1])):continue
+                # Try a bounded stagger along the same target bearing when
+                # closely spaced devices would otherwise merge arrowheads.
+                for extra in (0,3,6,head_depth+2,12,2*(head_depth+2)):
+                    base_gap=max(3,requested_gap)+extra
+                    gap=arrow_setback(target,ux,uy,base_gap,head_depth,head_half_width,obstacles)
+                    if label.get('target_element'):
+                        own=[(poly,ROLES['equipment']/2) for poly in voids if inside_polygon(target,poly)]
+                        expected=arrow_setback(target,ux,uy,base_gap,head_depth,head_half_width,own)
+                        if gap>expected+.1:continue
+                    if label.get('array_element'):
+                        if label['array_element'] not in (array_targets or {}):raise ValueError('Array callout needs a confirmed solar/solar_field element')
+                        expected=arrow_setback(target,ux,uy,base_gap,head_depth,head_half_width,array_targets[label['array_element']])
+                        if gap>expected+.1:continue
+                    # Keep a full 6 pt of visible straight shaft behind the
+                    # rearmost wing; never put an elbow inside the head.
+                    if length-gap<head_depth+6-1e-6:continue
+                    tip=(target[0]-gap*ux,target[1]-gap*uy)
+                    envelope=[tip,
+                              (tip[0]-head_depth*ux-head_half_width*uy,tip[1]-head_depth*uy+head_half_width*ux),
+                              (tip[0]-head_depth*ux+head_half_width*uy,tip[1]-head_depth*uy-head_half_width*ux)]
+                    proposed=[*route[:-1],(tip[0]-shaft_inset*ux,tip[1]-shaft_inset*uy)]
+                    if any(polygon_distance(envelope,other)<2-1e-6 for other in head_envelopes):continue
+                    if any(polygon_segment_distance(envelope,a,b)<2+ROLES['leader']/2-1e-6
+                           for prior in shaft_routes for a,b in zip(prior,prior[1:])):continue
+                    if any(polygon_segment_distance(other,a,b)<2+ROLES['leader']/2-1e-6
+                           for other in head_envelopes for a,b in zip(proposed,proposed[1:])):continue
+                    valid=True;break
+                if valid:break
+            if not valid:
+                raise ValueError(f'Extend the final leader segment or reroute {" ".join(lines)}: leave 6 pt of straight shaft behind the head, 2 pt between heads and other leaders, and no short jogs')
             tip=(target[0]-gap*ux,target[1]-gap*uy)
             route[-1]=tip
             # Stop the shaft inside the filled head: a stroke to the tip makes
             # a blunt nib protrude past the pointed Arrow 2 silhouette.
             route[-1]=(tip[0]-shaft_inset*ux,tip[1]-shaft_inset*uy)
-            d=path_d([["M",*route[0]],*[["L",*p] for p in route[1:]]])
-            if label.get("clearance",True):
-                leaders.append(f'<path d="{d}" fill="none" stroke="white" stroke-width="5" stroke-linejoin="round"/>')
+            shaft_commands=[["M",*route[0]],*[["L",*p] for p in route[1:]]]
+            d=path_d(clear_commands(shaft_commands,voids,ROLES['leader']/2))
             leaders.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{n(ROLES["leader"])}" stroke-linecap="butt"/>')
             def head_transform(p):
                 return (tip[0]+arrow_scale*(p[0]*ux-p[1]*uy),
                         tip[1]+arrow_scale*(p[0]*uy+p[1]*ux))
             head=transform_commands(arrow["commands"],head_transform)
+            head_envelopes.append(envelope);shaft_routes.append(list(route))
             leaders.append(f'<path data-arrowhead="Illustrator Arrow 2" d="{path_d(head)}" fill="{color}"/>')
-            targets.append({"text":lines,"source_target":label["target"],"output_target":target,"arrow_tip":tip,"setback_pt":gap})
+            targets.append({"text":lines,"source_target":label["target"],"output_target":target,"arrow_tip":tip,"setback_pt":gap,
+                            "shaft_route":route,"text_bbox":bbox,"attachment_side":side,
+                            "target_element":label.get('target_element'),'clearance':label.get('clearance',True),
+                            'head_envelope':envelope,'visible_straight_shaft_pt':length-gap-head_depth})
         for i,line in enumerate(lines):
-            texts.append(f'<text x="{n(label["x"])}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,Helvetica,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}">{html.escape(line)}</text>')
+            stretch=float(label.get('width_scale',1))
+            text_transform=f' transform="matrix({n(stretch)} 0 0 1 0 0)"' if stretch!=1 else ''
+            texts.append(f'<text x="{n(label["x"]/stretch)}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,Helvetica,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}"{text_transform}>{html.escape(line)}</text>')
     return '<g id="callout-leaders">'+"".join(leaders)+'</g><g id="callout-text">'+"".join(texts)+'</g>', targets
 
 
@@ -522,23 +1171,56 @@ def draw_north(north, applied_rotation, color):
     # Upright N stays below the symbol's rotated bounds, with consistent spacing.
     bb=bounds(vertices(commands)); size=height*.52
     letter=f'<text x="{n((bb[0]+bb[2])/2)}" y="{n(bb[3]+size+4)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="{n(size)}" fill="{color}">N</text>'
-    return f'<g id="north-arrow" data-rotation-deg="{n(angle)}">{needle}{letter}</g>', angle
+    return f'<g id="north-arrow" data-rotation-deg="{n(angle)}">{needle}{letter if north.get("include_label",True) else ""}</g>', angle
 
 
 def scene_artwork(scene, manifest):
+    scene=apply_output_mode(scene)
+    scene,zone_plan=placard_tools().prepare_scene(scene,manifest) if scene.get('placard') else (scene,None)
     elements,used,warnings=resolve_elements(scene,manifest)
     # Source compass artwork is replaced with the fixed house symbol.
     if any(el["role"]=="north" for el in elements):
         raise ValueError("Use north_arrow with source_rotation_deg; do not reuse customer compass artwork")
     box,transform,alignment=layout_for(scene,manifest,elements)
     color=html.escape(scene.get("color","#00a651"),quote=True)
-    body=[draw_elements(elements,transform,color,warnings,box)]
-    callouts=scene.get("callouts",[])
-    obstacles=arrow_obstacles(elements,transform) if callouts else ()
-    callout_svg,targets=draw_callouts(callouts,transform,color,box,warnings,obstacles)
+    production,clearances=production_elements(elements,transform,scene.get('production'))
+    production,equipment=normalize_equipment(production,transform)
+    voids=[vertices(path)[:-1] if path[-1][0]!='Z' and path[-1][-2:]==path[0][1:] else vertices(path)
+           for e in production if e['role']=='equipment' for path in e['paths']]
+    callouts=layout_callouts(scene.get("callouts",[]),scene.get('callout_layout'))
+    for label in callouts:
+        if 'target' in label and not label.get('target_element'):
+            target=transform(label['target'])
+            matches=[item['id'] for item in equipment
+                     if item['source_output_bounds'][0]-1e-5<=target[0]<=item['source_output_bounds'][2]+1e-5
+                     and item['source_output_bounds'][1]-1e-5<=target[1]<=item['source_output_bounds'][3]+1e-5]
+            if len(matches)==1: label['target_element']=matches[0]
+            elif len(matches)>1: raise ValueError('Ambiguous equipment callout; supply target_element explicitly')
+    obstacles=arrow_obstacles(production,lambda p:p) if callouts else ()
+    callout_svg,targets=draw_callouts(callouts,transform,color,box,warnings,obstacles,
+                                    {item['id']:item['output_center'] for item in equipment},voids,
+                                    {e['id']:[(poly,ROLES[e['role']]/2) for poly in closed_polygons(e['paths'],e['id'])]
+                                     for e in production if e['role'] in ('solar','solar_field') and any(c.get('array_element')==e['id'] for c in callouts)})
+    corridors=[]
+    for target in targets:
+        if not target['clearance']: continue
+        for a,b in zip(target['shaft_route'],target['shaft_route'][1:]):
+            length=math.dist(a,b)
+            if length<1e-6: continue
+            u=((b[0]-a[0])/length,(b[1]-a[1])/length); v=(-u[1],u[0]); radius=2.5
+            corridors.append([(p[0]+u[0]*cap+v[0]*side,p[1]+u[1]*cap+v[1]*side)
+                              for p,cap,side in ((a,-radius,-radius),(b,radius,-radius),
+                                                 (b,radius,radius),(a,-radius,radius))])
+    # Crossing clearances are real trimmed vectors, not stacked white strokes.
+    body=[draw_elements([e for e in production if e['role']!='equipment'],lambda p:p,color,warnings,box,
+                        voids+corridors,[item['wall_segment'] for item in equipment if item['wall_segment']])]
     body.append(callout_svg)
+    # Draw only the 1.5 pt unfilled rectangle outlines over the cleared artwork.
+    body.append(draw_elements([e for e in production if e['role']=='equipment'],lambda p:p,color,warnings,box))
     north_svg,north_angle=draw_north(scene.get("north_arrow"),alignment["rotation_deg"],color)
     body.append(north_svg)
+    for road in scene.get('roads',[]):
+        body.append(draw_road(road,transform,color))
     # Plain labels without leaders use final output point coordinates.
     for label in scene.get("labels", []):
         size = float(label.get("size_pt", 12))
@@ -549,10 +1231,20 @@ def scene_artwork(scene, manifest):
         if anchor not in ("start", "middle", "end"):
             raise ValueError("Invalid label anchor")
         for i, line in enumerate(lines):
-            body.append(f'<text x="{n(label["x"])}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}">{html.escape(line)}</text>')
+            stretch=float(label.get('width_scale',1))
+            if not math.isfinite(stretch) or stretch<=0:raise ValueError('Invalid label width scale')
+            text_transform=f' transform="matrix({n(stretch)} 0 0 1 0 0)"' if stretch!=1 else ''
+            body.append(f'<text x="{n(label["x"]/stretch)}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}"{text_transform}>{html.escape(line)}</text>')
+    zone_check=None
+    if zone_plan:
+        zone_check=placard_tools().validate_map_svg(''.join(body),box,zone_plan)
+        body.append(placard_tools().chrome_svg(zone_plan,color))
     counts={role:sum(el["role"]==role for el in elements) for role in ROLES if any(el["role"]==role for el in elements)}
-    report = {"status": "needs_visual_review", "elements_by_role": counts,
+    report = {"status": "needs_visual_review", "output_mode":scene.get('output_mode'), "elements_by_role": counts,
               "alignment":alignment, "stroke_widths_pt":ROLES,
+              "panel_clearance":clearances,
+              "equipment_rectangles":equipment,
+              "placard_layout":zone_plan,"zone_check":zone_check,
               "north_rotation_deg":north_angle,
               "north_direction":north_direction(scene["north_arrow"],alignment["rotation_deg"]) if scene.get("north_arrow") else None,
               "callout_targets":targets,
@@ -564,9 +1256,239 @@ def scene_artwork(scene, manifest):
     return "".join(body), box, report
 
 
+def cardinal_road_points(points):
+    """Nearest cardinal street direction, retaining its center and length."""
+    if len(points)!=2:raise ValueError('Straight road needs two source points')
+    a,b=points;dx,dy=b[0]-a[0],b[1]-a[1];length=math.hypot(dx,dy)
+    if length<1e-6:raise ValueError('Road has zero length')
+    u=(1 if dx>=0 else -1,0) if abs(dx)>=abs(dy) else (0,1 if dy>=0 else -1)
+    center=tuple((a[j]+b[j])/2 for j in (0,1))
+    return [tuple(center[j]+sign*length*u[j]/2 for j in (0,1)) for sign in (-1,1)]
+
+
+def draw_road(road,transform,color):
+    """Cardinal solid/dashed street on the source-confirmed side of the site."""
+    if not road.get('evidence') or not road.get('source_side'):
+        raise ValueError('Road needs source side/location evidence')
+    points=road.get('points',[])
+    if len(points)!=2:raise ValueError('Straight road helper requires two points; trace source bends/curves explicitly')
+    a,b=cardinal_road_points(list(map(transform,points)));length=math.dist(a,b)
+    if length<1e-6:raise ValueError('Road has zero length')
+    offset=float(road['outer_offset_pt'])
+    if not math.isfinite(offset) or abs(offset)<10:raise ValueError('Road lane needs a reviewed offset of at least 10 pt')
+    normal=(-(b[1]-a[1])/length,(b[0]-a[0])/length)
+    c=tuple(a[j]+normal[j]*offset for j in (0,1));d=tuple(b[j]+normal[j]*offset for j in (0,1))
+    paths=[f'<path data-role="road-edge" d="M{n(a[0])} {n(a[1])} L{n(b[0])} {n(b[1])}" fill="none" stroke="{color}" stroke-width="0.75"/>']
+    dashed=dash_commands([['M',*c],['L',*d]],road.get('dash_pt',[18,18]),0)
+    paths.append(f'<path data-role="road-dashed" d="{path_d(dashed)}" fill="none" stroke="{color}" stroke-width="0.75"/>')
+    label=road.get('label')
+    if label:
+        angle=math.atan2(b[1]-a[1],b[0]-a[0])
+        if angle>math.pi/2:angle-=math.pi
+        if angle<=-math.pi/2:angle+=math.pi
+        size=float(label.get('size_pt',8));co,si=math.cos(angle),math.sin(angle)
+        # Keep lettering centered in the normalized street lane, parallel to its
+        # cardinal direction. Old source-angle label coordinates are not reused.
+        mid=tuple((a[j]+b[j]+c[j]+d[j])/4 for j in (0,1))
+        x,y=mid[0]-si*size*.39,mid[1]+co*size*.39
+        paths.append(f'<text x="0" y="0" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="{n(size)}" fill="{color}" transform="matrix({n(co)} {n(si)} {n(-si)} {n(co)} {n(x)} {n(y)})">{html.escape(label["text"])}</text>')
+    return ''.join(paths)
+
+
+def parse_export_path(data):
+    tokens=re.findall(r'[MLCZ]|[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?',data)
+    result=[]; i=0; sizes={'M':2,'L':2,'C':6,'Z':0}
+    while i<len(tokens):
+        command=tokens[i]; i+=1
+        if command not in sizes: raise ValueError('Unexpected production SVG path syntax')
+        count=sizes[command]
+        result.append([command,*map(float,tokens[i:i+count])]); i+=count
+    return result
+
+
+def line_overlap(a,b,c,d):
+    length=math.dist(a,b)
+    if length<1e-7: return None
+    u=((b[0]-a[0])/length,(b[1]-a[1])/length)
+    if abs(cross(u,(c[0]-a[0],c[1]-a[1])))>1e-4 or abs(cross(u,(d[0]-a[0],d[1]-a[1])))>1e-4:
+        return None
+    lo,hi=sorted(((p[0]-a[0])*u[0]+(p[1]-a[1])*u[1] for p in (c,d)))
+    lo,hi=max(0,lo),min(length,hi)
+    return (lo,hi) if hi-lo>1e-5 else None
+
+
+def clean_export(svg):
+    """Bake translations, flatten objects and remove coincident stroked edges."""
+    ns='{http://www.w3.org/2000/svg}'
+    ET.register_namespace('',ns[1:-1])
+    root=ET.fromstring(svg); leaves=[]; names={}; hidden=0
+    def walk(node,dx=0,dy=0,metadata=None):
+        nonlocal hidden
+        tag=node.tag.split('}')[-1]; metadata=dict(metadata or {})
+        for key,value in node.attrib.items():
+            if key.startswith('data-'): metadata[key]=value
+        if tag in ('defs','clipPath','mask','title','desc','metadata'): return
+        if tag=='g':
+            identity=node.get('id','')
+            if identity: metadata['data-element']=identity
+            if identity.startswith('item-') and identity.count('-')==1: metadata['data-map']=identity
+            if identity.endswith('callout-leaders'): metadata['data-role']='leader'
+        text_scale=1.0;text_tx=text_ty=0.0;text_matrix=None
+        if node.get('transform'):
+            match=re.fullmatch(r'translate\(([-\d.eE]+)[ ,]+([-\d.eE]+)\)',node.get('transform'))
+            if match:dx+=float(match[1]);dy+=float(match[2])
+            else:
+                matrix=re.fullmatch(r'matrix\(([-\d.eE]+)[ ,]+([-\d.eE]+)[ ,]+([-\d.eE]+)[ ,]+([-\d.eE]+)[ ,]+([-\d.eE]+)[ ,]+([-\d.eE]+)\)',node.get('transform'))
+                if tag!='text' or not matrix:raise ValueError('Only text may retain rotation or type condensation; map geometry must be baked')
+                a,b,c,d,e,f=map(float,matrix.groups())
+                if not all(math.isfinite(v) for v in (a,b,c,d,e,f)) or a*d-b*c<=0 or abs(math.hypot(c,d)-1)>1e-5 or abs(a*c+b*d)>1e-5:
+                    raise ValueError('Text matrix must preserve type height and contain no skew')
+                if abs(b)<1e-8 and abs(c)<1e-8 and abs(d-1)<1e-8:
+                    text_scale=a;text_tx=e;text_ty=f
+                else:text_matrix=[a,b,c,d,e+dx,f+dy]
+        if tag in ('svg','g'):
+            for child in node: walk(child,dx,dy,metadata)
+            return
+        if tag not in ('path','text'): raise ValueError(f'Unexpected production SVG object: {tag}')
+        attrs={**metadata,**node.attrib}
+        for key in ('transform','clip-path','mask'): attrs.pop(key,None)
+        if tag=='path':
+            stroke=attrs.get('stroke','none')!='none' and float(attrs.get('stroke-width',1))>0
+            fill=attrs.get('fill','black')!='none'
+            if not stroke and not fill: hidden+=1; return
+            commands=transform_commands(parse_export_path(attrs['d']),lambda p:(p[0]+dx,p[1]+dy))
+            attrs['d']=path_d(commands)
+        else:
+            if text_matrix:
+                attrs['transform']='matrix('+ ' '.join(n(v) for v in text_matrix)+')'
+            else:
+                attrs['x']=n(float(attrs.get('x',0))+(dx+text_tx)/text_scale); attrs['y']=n(float(attrs.get('y',0))+dy+text_ty)
+                if text_scale!=1:attrs['transform']=f'matrix({n(text_scale)} 0 0 1 0 0)'
+            if float(attrs.get('font-size',12))<10:
+                attrs['fill']='#ed1c24';attrs['data-engraving']='small'
+        name=attrs.get('id') or attrs.get('data-element') or tag
+        names[name]=names.get(name,0)+1
+        attrs['id']=name if names[name]==1 else f'{name}-{names[name]}'
+        leaf=ET.Element(ns+tag,attrs); leaf.text=node.text; leaves.append(leaf)
+    walk(root)
+    records=[]; by_owner={}; original_paths={}
+    for owner,leaf in enumerate(leaves):
+        if leaf.tag!=ns+'path' or leaf.get('stroke','none')=='none': continue
+        commands=parse_export_path(leaf.get('d')); paths=[]; current=[]
+        for command in commands:
+            if command[0]=='M' and current: paths.append(current); current=[]
+            current.append(command)
+        if current: paths.append(current)
+        original_paths[owner]=paths; by_owner[owner]=[]
+        for sub,path in enumerate(paths):
+            start=previous=None; primitive=0
+            for command in path:
+                if command[0]=='M': start=previous=tuple(command[1:]); continue
+                end=start if command[0]=='Z' else tuple(command[-2:])
+                cmd=['L',*end] if command[0]=='Z' else command
+                kind=cmd[0]
+                if kind=='C' and math.dist(previous,end)>1e-6:
+                    controls=[cmd[1:3],cmd[3:5]]
+                    if all(point_segment_distance(p,previous,end)<1e-5 for p in controls): kind='L'
+                record={'owner':owner,'sub':sub,'a':previous,'b':end,'cmd':cmd,'kind':kind,
+                        'width':float(leaf.get('stroke-width',1)),'role':leaf.get('data-role'),
+                        'mount':leaf.get('data-role')=='equipment' and leaf.get('data-mount-side')!='freestanding' and primitive==0,
+                        'parts':[(previous,cmd)],'changed':False}
+                records.append(record); by_owner[owner].append(record)
+                previous=end; primitive+=1
+    covered=[]; curves=set(); removed=0; length_removed=0.0
+    for record in sorted(records,key=lambda r:(-r['width'],r['owner'])):
+        if record['role']=='equipment': continue
+        if record['kind']=='C':
+            pts=[record['a'],*vertices([record['cmd']])]
+            key=min(tuple(round(v,4) for p in pts for v in p),tuple(round(v,4) for p in reversed(pts) for v in p))
+            if key in curves: record.update(parts=[],changed=True); removed+=1
+            curves.add(key); continue
+        a,b=record['a'],record['b']; length=math.dist(a,b)
+        if length<1e-7: record.update(parts=[],changed=True); continue
+        intervals=[(0.0,length)]
+        for c,d in covered:
+            overlap=line_overlap(a,b,c,d)
+            if overlap is None: continue
+            lo,hi=overlap; remaining=[]
+            for p,q in intervals:
+                if hi<=p or lo>=q: remaining.append((p,q)); continue
+                if p<lo: remaining.append((p,lo))
+                if hi<q: remaining.append((hi,q))
+            intervals=remaining
+            if not intervals: break
+        covered.append((a,b))
+        kept=sum(q-p for p,q in intervals)
+        if length-kept>1e-5:
+            u=((b[0]-a[0])/length,(b[1]-a[1])/length)
+            record['parts']=[(tuple(a[j]+p*u[j] for j in (0,1)),['L',*[a[j]+q*u[j] for j in (0,1)]])
+                             for p,q in intervals if q-p>1e-5]
+            record['changed']=True; removed+=1; length_removed+=length-kept
+    # Preserve only the intentional equipment mounting-edge / wall overlap.
+    allowed=0
+    eq=[r for r in records if r['role']=='equipment']
+    for i,record in enumerate(eq):
+        for other in eq[:i]:
+            if record['owner']!=other['owner'] and line_overlap(record['a'],record['b'],other['a'],other['b']):
+                on_wall=record['mount'] and other['mount'] and any(
+                    wall['role'] in ('building','wall') and wall['kind']=='L' and
+                    line_overlap(record['a'],record['b'],wall['a'],wall['b']) for wall in records)
+                if not on_wall:
+                    raise ValueError('Equipment rectangles overlap; reduce symbol width or resolve the source wall positions')
+        for other in records:
+            if other['role']=='equipment' or other['kind']!='L': continue
+            for start,cmd in other['parts']:
+                if line_overlap(record['a'],record['b'],start,cmd[-2:]):
+                    if record['mount'] and other['role'] in ('building','wall'): allowed+=1
+                    else: raise ValueError('Unresolved equipment edge overlap outside its mounting wall')
+    for owner,items in by_owner.items():
+        if not any(r['changed'] for r in items): continue
+        commands=[]
+        for sub,path in enumerate(original_paths[owner]):
+            members=[r for r in items if r['sub']==sub]
+            if not any(r['changed'] for r in members): commands.extend(path); continue
+            pieces=[piece for r in members for piece in r['parts']]
+            if path[-1][0]=='Z' and pieces:
+                for i in range(len(pieces)):
+                    if math.dist(pieces[i-1][1][-2:],pieces[i][0])>1e-5:
+                        pieces=pieces[i:]+pieces[:i]; break
+            end=None
+            for start,cmd in pieces:
+                if end is None or math.dist(end,start)>1e-5: commands.append(['M',*start])
+                commands.append(cmd); end=cmd[-2:]
+        if leaves[owner].get('fill','none')!='none':
+            raise ValueError('Coincident stroke on a filled source shape needs explicit scene separation')
+        leaves[owner].set('d',path_d(commands))
+    output=ET.Element(root.tag,root.attrib); filled=set()
+    for leaf in leaves:
+        if leaf.tag==ns+'path':
+            if not leaf.get('d'): continue
+            if leaf.get('stroke','none')=='none':
+                key=(leaf.get('d'),leaf.get('fill'),leaf.get('fill-rule'))
+                if key in filled: hidden+=1; continue
+                filled.add(key)
+            elif leaf.get('fill','none')=='none':
+                chunks=[]; chunk=[]
+                for command in parse_export_path(leaf.get('d')):
+                    if command[0]=='M' and chunk: chunks.append(chunk); chunk=[]
+                    chunk.append(command)
+                if chunk: chunks.append(chunk)
+                if len(chunks)>1:
+                    for index,chunk in enumerate(chunks,1):
+                        attributes={**leaf.attrib,'d':path_d(chunk),'id':leaf.get('id')+f'-part-{index}'}
+                        output.append(ET.Element(ns+'path',attributes))
+                    continue
+        output.append(leaf)
+    return ET.tostring(output,encoding='unicode'),{'groups':0,'clipping_paths':0,'hidden_paths_removed':hidden,
+             'overlap_segments_removed':removed,'overlap_length_removed_pt':length_removed,
+             'permitted_equipment_wall_edges':allowed}
+
+
 def render_scene(scene, manifest):
     body, box, report = scene_artwork(scene, manifest)
-    return svg_wrap(body, box, physical=True), report
+    svg,cleanup=clean_export(svg_wrap(body, box, physical=True))
+    report['export_cleanup']=cleanup
+    return svg, report
 
 
 def source_trace(scene,manifest):
@@ -599,8 +1521,8 @@ def output_filename(scene, manifest):
     if count>1:
         raise ValueError("Render an order scene with all maps on one artboard")
     if letter is not None:
-        if not isinstance(letter,str) or not re.fullmatch(r"[A-Za-z]",letter):
-            raise ValueError("job.item_letter must be one source-confirmed letter")
+        if not isinstance(letter,str) or not re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}",letter):
+            raise ValueError("job.item_letter must be a source-confirmed item code, such as A, AC or A1")
         if job.get("item_letter") and not job.get("item_evidence"):
             raise ValueError("Record job.item_evidence linking the letter to the source map")
     return order+(f'-{letter.upper()}' if letter else '')+'.svg'
@@ -610,6 +1532,8 @@ def verified_source(scene_file, scene, with_image):
     manifest_file = (scene_file.parent/scene["manifest"]).resolve()
     manifest = read_json(manifest_file)
     source = Path(manifest["source"])
+    if not source.is_absolute():
+        source = (manifest_file.parent/source).resolve()
     if not source.exists():
         raise FileNotFoundError("Source unavailable; restore it before rendering a verified map")
     if hashlib.sha256(source.read_bytes()).hexdigest() != manifest["sha256"]:
@@ -651,18 +1575,23 @@ def write_diagnostics(diagnostics, scene, manifest, svg, report, original):
     write_json(diagnostics/"review.json",report)
 
 
-def render_order(scene_file, order, diagnostics=None):
+def render_order(scene_file, order, diagnostics=None, mode=None):
     """Lay out separately reviewed maps at their original output scale."""
     map_files = order["maps"]
     if not isinstance(map_files, list) or len(map_files) < 2:
         raise ValueError("A shared artboard requires at least two map scene paths")
     if order.get("job", {}).get("map_count", len(map_files)) != len(map_files):
         raise ValueError("job.map_count must match the number of map scenes")
+    mode = mode if mode is not None else order.get('output_mode')
+    if mode is not None and mode not in OUTPUT_MODES:
+        raise ValueError('output_mode must be map-only, map-labeled or finished')
     panels = {}
     order_id = None
     for map_file in map_files:
         path = scene_file.parent / map_file
         scene = read_json(path)
+        if mode is not None:
+            scene=apply_output_mode(scene,mode)
         manifest, original = verified_source(path, scene, diagnostics is not None)
         this_order, _ = work_order_id(scene, manifest)
         if order_id is None:
@@ -670,7 +1599,7 @@ def render_order(scene_file, order, diagnostics=None):
         if this_order != order_id:
             raise ValueError(f"{map_file} belongs to {this_order}, expected {order_id}")
         letter = scene.get("job", {}).get("item_letter", "")
-        if not isinstance(letter, str) or not re.fullmatch(r"[A-Za-z]", letter) or not scene["job"].get("item_evidence"):
+        if not isinstance(letter, str) or not re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}", letter) or not scene["job"].get("item_evidence"):
             raise ValueError(f"Supply a source-confirmed item letter and evidence for {map_file}")
         letter = letter.upper()
         if letter in panels:
@@ -678,25 +1607,35 @@ def render_order(scene_file, order, diagnostics=None):
         body, box, report = scene_artwork(scene, manifest)
         panels[letter] = (body, box, report, scene, manifest, original)
 
-    margin, gutter, heading = 24, 36, 28
+    modes={panel[2].get('output_mode') for panel in panels.values()}
+    if len(modes)>1:
+        raise ValueError('Use one output mode for every map on the sales order')
+    effective_mode=next(iter(modes))
+    margin, gutter, heading = 24, 36, 0 if effective_mode=='map-only' else 28
     content, reports = [], []
     y, width = margin, 0
-    items = sorted(panels.items())
+    def item_order(item):
+        letters,number=re.fullmatch(r'([A-Z]+)(\d*)',item[0]).groups()
+        alphabetic=0
+        for char in letters: alphabetic=alphabetic*26+ord(char)-ord('A')+1
+        return alphabetic,int(number or 0)
+    items = sorted(panels.items(),key=item_order)
     for row_start in range(0, len(items), 2):
         x, row_height = margin, 0
         for letter, (body, box, report, scene, manifest, original) in items[row_start:row_start+2]:
             panel_id = f'item-{letter}'
+            ids=re.findall(r' id="([^"]+)"',body)
             body = re.sub(r' id="([^"]+)"', rf' id="{panel_id}-\1"', body)
-            clip_id = f'{panel_id}-clip'
+            for old_id in ids:
+                body=body.replace(f'url(#{old_id})',f'url(#{panel_id}-{old_id})')
             label = f'{order_id}-{letter}'
+            item_heading = '' if effective_mode=='map-only' else (
+                f'<text x="{n(x)}" y="{n(y+16)}" font-family="Arial,Helvetica,sans-serif" '
+                f'font-size="14" font-weight="bold">{label}</text>')
             content.append(
                 f'<g id="{panel_id}"><title>{label}</title>'
-                f'<text x="{n(x)}" y="{n(y+16)}" font-family="Arial,Helvetica,sans-serif" '
-                f'font-size="14" font-weight="bold">{label}</text>'
-                f'<defs><clipPath id="{clip_id}"><rect x="{n(box.x0)}" y="{n(box.y0)}" '
-                f'width="{n(box.width)}" height="{n(box.height)}"/></clipPath></defs>'
-                f'<g transform="translate({n(x-box.x0)} {n(y+heading-box.y0)})" '
-                f'clip-path="url(#{clip_id})">{body}</g></g>'
+                f'{item_heading}'
+                f'<g transform="translate({n(x-box.x0)} {n(y+heading-box.y0)})">{body}</g></g>'
             )
             if diagnostics is not None:
                 write_diagnostics(Path(diagnostics)/letter, scene, manifest,
@@ -707,20 +1646,23 @@ def render_order(scene_file, order, diagnostics=None):
             x += box.width+gutter
         y += row_height+gutter
     artboard = viewport([0, 0, width, y-gutter+margin])
-    report = {"status":"needs_visual_review", "output_filename":f"{order_id}.svg",
+    report = {"status":"needs_visual_review", "output_mode":effective_mode, "output_filename":f"{order_id}.svg",
               "maps":reports, "warnings":[f'{item["label"]}: {warning}'
                                            for item in reports for warning in item["report"]["warnings"]]}
-    return svg_wrap("".join(content), artboard, physical=True), report
+    svg,cleanup=clean_export(svg_wrap("".join(content), artboard, physical=True))
+    report['export_cleanup']=cleanup
+    return svg, report
 
 
-def render(scene_file, output, *, preview=None, diagnostics=None):
+def render(scene_file, output, *, preview=None, diagnostics=None, mode=None):
     """Write one vector artboard for the order, with optional internal QA."""
     scene_file, output = Path(scene_file), Path(output)
     scene = read_json(scene_file)
     preview = Path(preview) if preview is not None else None
     if "maps" in scene:
-        svg, report = render_order(scene_file, scene, diagnostics)
+        svg, report = render_order(scene_file, scene, diagnostics, mode=mode)
     else:
+        scene=apply_output_mode(scene,mode)
         manifest, original = verified_source(scene_file, scene, diagnostics is not None)
         filename = output_filename(scene, manifest)
         svg, report = render_scene(scene, manifest)
@@ -753,10 +1695,11 @@ def main():
     p.add_argument("--output",required=True)
     p.add_argument("--preview", help="Optional PNG path for a quick visual check")
     p.add_argument("--diagnostics", help="Optional directory for the full source comparison and review assets")
+    p.add_argument("--mode", choices=OUTPUT_MODES, help="Choose map geometry, labeled map or finished placard")
     args=parser.parse_args()
     if args.command=="inspect": result=inspect_source(args.source,args.output)
     elif args.command=="extract": result=extract(args.source,args.page,args.clip,args.output)
-    else: result=render(args.scene,args.output,preview=args.preview,diagnostics=args.diagnostics)
+    else: result=render(args.scene,args.output,preview=args.preview,diagnostics=args.diagnostics,mode=args.mode)
     print(json.dumps(result,indent=2))
 
 

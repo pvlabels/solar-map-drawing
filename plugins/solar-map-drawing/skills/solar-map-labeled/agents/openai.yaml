@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solar Map With Labels"
+  short_description: "Solar maps with wording and direct arrows"
+  default_prompt: "Use $solar-map-labeled on the attached PDF. Create the map with equipment and array wording and direct arrows, without caution wording, cutline or footer. Return the editable WO-named SVG using our saved drawing rules and flag unclear source details."

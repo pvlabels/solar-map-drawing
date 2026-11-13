@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "description": "Physical sizes and finishing conventions measured from supplied production artwork and local stock SVGs. Nominal ordered inches and cutline points are separate. These are layout profiles, not authority for a site's electrical wording.",
+  "cutline": {
+    "color": "#00aeef",
+    "stroke_pt": 0.001
+  },
+  "footer": {
+    "color": "#ed1c24",
+    "size_pt": 5,
+    "margin_x_pt": 18,
+    "baseline_from_bottom_pt": 4.68,
+    "reserve_height_pt": 14,
+    "website": "pvlabels.com"
+  },
+  "profiles": {
+    "stock-04-650": {
+      "nominal_in": [
+        5,
+        5
+      ],
+      "cut_size_pt": [
+        356.4,
+        356.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "classic",
+      "stock_sku": "04-650",
+      "evidence": "Local 04-650 template and matched Bright production cutlines.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-649": {
+      "nominal_in": [
+        6.5,
+        6.5
+      ],
+      "cut_size_pt": [
+        464.4,
+        464.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "large_classic",
+      "stock_sku": "04-649",
+      "evidence": "Local 04-649 template and matched Scudder production cutlines.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-644": {
+      "nominal_in": [
+        5,
+        7
+      ],
+      "cut_size_pt": [
+        356.4,
+        500.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "classic",
+      "stock_sku": "04-644",
+      "evidence": "Local 04-644 production SVG, measured 356.4 by 500.4 points.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-647": {
+      "nominal_in": [
+        5,
+        6
+      ],
+      "cut_size_pt": [
+        356.4,
+        428.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "classic",
+      "stock_sku": "04-647",
+      "evidence": "Local 04-647 production SVG, measured 356.4 by 428.4 points.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-648": {
+      "nominal_in": [
+        8,
+        8
+      ],
+      "cut_size_pt": [
+        572.4,
+        572.4
+      ],
+      "safe_inset_pt": 12.85,
+      "warning_style": "large_alternative",
+      "stock_sku": "04-648",
+      "evidence": "Local 04-648 production SVG, measured 572.4 by 572.4 points.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-651": {
+      "nominal_in": [
+        4,
+        4
+      ],
+      "cut_size_pt": [
+        284.4,
+        284.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "small_caution",
+      "stock_sku": "04-651",
+      "evidence": "Local 04-651 production SVG, measured 284.4 by 284.4 points.",
+      "material_family": "engraved_plastic"
+    },
+    "plastic-5-square": {
+      "nominal_in": [
+        5,
+        5
+      ],
+      "cut_size_pt": [
+        356.4,
+        356.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "classic",
+      "evidence": "Matched generic 4-55 Bright map orders and production cutlines. Warning wording still requires source evidence.",
+      "material_family": "engraved_plastic"
+    },
+    "tfs-5.5-square": {
+      "nominal_in": [
+        5.5,
+        5.5
+      ],
+      "cut_size_pt": [
+        392.4,
+        392.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "tfs_caution",
+      "evidence": "Matched TFS 04-1 5.5 inch orders and 392.4 point cutlines.",
+      "material_family": "engraved_plastic"
+    },
+    "plastic-6.5-square": {
+      "nominal_in": [
+        6.5,
+        6.5
+      ],
+      "cut_size_pt": [
+        464.4,
+        464.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "large_classic",
+      "evidence": "Matched Scudder custom 04-1 orders and 464.4 point production cutlines. Warning wording still requires source evidence.",
+      "material_family": "engraved_plastic"
+    },
+    "directory-11x8.5": {
+      "nominal_in": [
+        11,
+        8.5
+      ],
+      "cut_size_pt": [
+        788.4,
+        608.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "directory",
+      "evidence": "Eight matched Hoosier plastic directory maps ordered 11 by 8.5 inches and measured 788.4 by 608.4 points. Header corner varies by source.",
+      "material_family": "engraved_plastic"
+    },
+    "stock-04-645": {
+      "nominal_in": [
+        4,
+        6
+      ],
+      "cut_size_pt": [
+        284.4,
+        428.4
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "narrow_classic",
+      "stock_sku": "04-645",
+      "evidence": "Two matched 4 by 6 inch map orders and production cutlines from older and recent Bright artwork.",
+      "material_family": "engraved_plastic"
+    },
+    "plastic-5x7.75": {
+      "nominal_in": [
+        5,
+        7.75
+      ],
+      "cut_size_pt": [
+        356.4,
+        558
+      ],
+      "safe_inset_pt": 8,
+      "warning_style": "classic",
+      "evidence": "Two matched 5 by 7.75 inch 04-682 orders and production cutlines. Width reduces by 0.05 inch; height remains 7.75 inches. Exact source warning and lower notes required.",
+      "material_family": "engraved_plastic"
+    }
+  },
+  "warning_styles": {
+    "classic": {
+      "heading_size_pt": 38,
+      "heading_baseline_pt": 42.87,
+      "body_size_pt": 15,
+      "body_baseline_pt": 63.87,
+      "leading_pt": 18,
+      "width_scale": 1,
+      "default_heading": "CAUTION",
+      "default_lines": [
+        "POWER TO THIS BUILDING IS ALSO",
+        "SUPPLIED FROM THE FOLLOWING SOURCES",
+        "WITH DISCONNECTS LOCATED AS SHOWN:"
+      ]
+    },
+    "multiple_sources": {
+      "heading_size_pt": 38,
+      "heading_baseline_pt": 42.87,
+      "body_size_pt": 15,
+      "body_baseline_pt": 63.87,
+      "leading_pt": 18,
+      "width_scale": 1
+    },
+    "large_classic": {
+      "heading_size_pt": 75,
+      "heading_baseline_pt": 74.47,
+      "body_size_pt": 25,
+      "body_baseline_pt": 108.1,
+      "leading_pt": 29,
+      "width_scale": 0.8,
+      "default_heading": "CAUTION",
+      "default_lines": [
+        "POWER TO THIS BUILDING IS ALSO",
+        "SUPPLIED FROM THE FOLLOWING SOURCES",
+        "WITH DISCONNECTS LOCATED AS SHOWN:"
+      ]
+    },
+    "large_alternative": {
+      "heading_size_pt": 75,
+      "heading_baseline_pt": 73.52,
+      "body_size_pt": 38,
+      "body_baseline_pt": 116.4,
+      "leading_pt": 39,
+      "width_scale": 0.73,
+      "default_heading": "CAUTION",
+      "default_lines": [
+        "THIS SERVICE SUPPLIED BY",
+        "ALTERNATIVE POWER SOURCES WITH",
+        "DISCONNECTS LOCATED AS SHOWN:"
+      ]
+    },
+    "small_caution": {
+      "heading_size_pt": 25,
+      "heading_baseline_pt": 29.19,
+      "body_size_pt": 12,
+      "body_baseline_pt": 46.34,
+      "leading_pt": 14.4,
+      "width_scale": 1,
+      "default_heading": "CAUTION",
+      "default_lines": [
+        "MULTIPLE SOURCES OF POWER",
+        "POWER IS SUPPLIED TO THIS BUILDING",
+        "FROM THE FOLLOWING SOURCES WITH",
+        "DISCONNECTS AS SHOWN."
+      ]
+    },
+    "tfs_caution": {
+      "heading_size_pt": 20,
+      "heading_baseline_pt": 24.5,
+      "heading_width_scale": 0.81,
+      "body_size_pt": 13,
+      "body_baseline_pt": 40.5,
+      "leading_pt": 15,
+      "width_scale": 0.81,
+      "divider": true
+    },
+    "partial_shutdown": {
+      "heading_size_pt": 20,
+      "heading_baseline_pt": 22.5,
+      "heading_leading_pt": 22,
+      "heading_width_scale": 0.81,
+      "body_size_pt": 13,
+      "body_gap_pt": 17.5,
+      "leading_pt": 15,
+      "width_scale": 0.81,
+      "divider": true
+    },
+    "directory": {
+      "heading_size_pt": 30,
+      "heading_baseline_pt": 54.7,
+      "heading_leading_pt": 38,
+      "body_size_pt": 13,
+      "body_gap_pt": 18,
+      "leading_pt": 16,
+      "width_scale": 1
+    },
+    "narrow_classic": {
+      "heading_size_pt": 38,
+      "heading_baseline_pt": 44.32,
+      "body_size_pt": 12,
+      "body_baseline_pt": 62.65,
+      "leading_pt": 14.4,
+      "width_scale": 1,
+      "default_heading": "CAUTION",
+      "default_lines": [
+        "POWER TO THIS BUILDING IS ALSO",
+        "SUPPLIED FROM THE FOLLOWING SOURCES",
+        "WITH DISCONNECTS LOCATED AS SHOWN:"
+      ]
+    }
+  }
+}

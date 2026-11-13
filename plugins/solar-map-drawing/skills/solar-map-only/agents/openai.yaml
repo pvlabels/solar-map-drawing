@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solar Map Only"
+  short_description: "Editable solar geometry without labels"
+  default_prompt: "Use $solar-map-only on the attached PDF. Create the map only from the attached PDF, with no labeling, callout leaders, caution wording, cutline or footer. Return the editable WO-named SVG using our saved drawing rules and flag unclear source details."

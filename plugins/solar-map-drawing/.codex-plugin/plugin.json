@@ -1,0 +1,28 @@
+{
+  "interface": {
+    "capabilities": [],
+    "category": "Creativity",
+    "composerIcon": "./assets/icon.svg",
+    "defaultPrompt": "Turn this customer drawing into an editable solar site SVG, preserving its buildings, panels, equipment, and north.",
+    "developerName": "jackson perry",
+    "displayName": "Solar Map Drawing",
+    "logo": "./assets/icon.svg",
+    "longDescription": "Upload a customer PDF in a file-capable ChatGPT Work or Codex chat and receive a WO-named editable solar SVG. Starts with the confirmed sales-order item and dimensions, then plans zones for the warning, map and compact callouts, lower operational notes and footer. Includes measured production cutline profiles, exact source warning wording and item-specific part identifiers. Preserves the saved map stroke weights, main-structure alignment, compensated north symbol, Illustrator Arrow 2 shapes, equipment mounting and visible arrow gaps. Multiple maps retain their individual physical sizes on one labeled artboard. Includes portable attachment staging, content-hash caching, session-local dependency setup and a Python renderer. Uses host-provided Python 3.10+ with PyMuPDF and Pillow; no model API key, separate app, shared drive or rendering server is required. A chat without Python/file execution or package access cannot run the renderer. Source interpretation, tracing, callout placement and visual review remain agent-assisted. Unconfirmed production sizes, warning conflicts and requested hole patterns are flagged rather than guessed.",
+    "shortDescription": "Editable solar site maps"
+  },
+  "name": "solar-map-drawing",
+  "version": "3.1.0",
+  "description": "Create editable solar map placards from customer PDFs using ordered-size zones, source-confirmed warnings, compact callouts, production cutlines and footer identifiers.",
+  "author": {
+    "name": "jackson perry",
+    "email": "jackson@pvlabels.com"
+  },
+  "keywords": [
+    "solar",
+    "site-map",
+    "svg",
+    "placard",
+    "drawing"
+  ],
+  "skills": "./skills"
+}

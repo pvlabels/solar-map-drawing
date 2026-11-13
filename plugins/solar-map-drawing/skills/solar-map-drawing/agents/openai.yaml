@@ -1,4 +1,4 @@
 interface:
-  display_name: "Solar Map Drawing"
-  short_description: "Trace faithful, editable solar facilities maps"
-  default_prompt: "Use $solar-map-drawing to turn this customer drawing into an editable map, checking the building, roof, panels, and equipment before fitting a placard template."
+  display_name: "Finished Solar Map"
+  short_description: "Complete solar placards with caution and cutline"
+  default_prompt: "Use $solar-map-drawing on the attached PDF. Create the finished map placard from the attached PDF with labels, source-confirmed caution wording, cutline and footer. Return the editable WO-named SVG using our saved drawing rules and flag unclear source details."
