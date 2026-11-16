@@ -771,9 +771,20 @@ def dash_commands(commands, pattern, phase=0):
     return output
 
 
+def equipment_box_size():
+    """Fixed 1.5:1 geometry, 25% wider than the canonical Arrow 2 head."""
+    arrow=read_json(Path(__file__).resolve().parents[1]/'assets/leader-arrow-2.json')
+    ys=[p[1] for p in vertices(arrow['commands'])]
+    head_width=(max(ys)-min(ys))*ROLES['leader']/float(arrow['reference_stroke_pt'])
+    if not math.isfinite(head_width) or head_width<=0:raise ValueError('Invalid canonical arrowhead width')
+    width=head_width*1.25
+    return width,width/1.5
+
+
 def normalize_equipment(elements, transform):
-    """Replace customer symbols with plain 1.5 pt rectangles touching wall ink."""
+    """Replace source glyphs with equal arrow-sized 1.5 pt equipment rectangles."""
     if not any(el['role']=='equipment' for el in elements): return elements,[]
+    width,depth=equipment_box_size()
     reports=[]
     walls=[]
     for el in elements:
@@ -800,8 +811,6 @@ def normalize_equipment(elements, transform):
         if el['role']!='equipment': result.append(el); continue
         bb=bounds([p for path in el['paths'] for p in vertices(path)])
         original=((bb[0]+bb[2])/2,(bb[1]+bb[3])/2)
-        width,depth=map(float,el.get('box_size_pt',[12,10]))
-        if not all(math.isfinite(v) and v>0 for v in (width,depth)): raise ValueError('Invalid equipment rectangle size')
         if el.get('mount_side')=='freestanding':
             angle=float(el.get('box_rotation_deg',0))
             if not math.isfinite(angle): raise ValueError('Invalid freestanding equipment rotation')
