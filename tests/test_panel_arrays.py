@@ -58,13 +58,17 @@ class PanelArrays(unittest.TestCase):
         self.assertAlmostEqual(w.polygon_distance(*polygons(out)),2)
 
     def test_explicit_spacing_exception_is_visible_stroke_gap(self):
-        metadata=dict(array_id='special',array_gap_pt=2,array_spacing_evidence='Current user requests 2 pt spacing.')
+        metadata=dict(array_id='special',array_gap_pt=2,array_spacing_evidence='Current user requests 2 pt spacing.',array_spacing_authorization='user')
         out,_=self.fit([panel('a',20,20,**metadata),panel('b',32,20,**metadata)])
         self.assertAlmostEqual(w.polygon_distance(*polygons(out))-1.25,2)
 
     def test_spacing_requires_evidence(self):
         with self.assertRaisesRegex(ValueError,'array_spacing_evidence'):
             self.fit([panel('a',20,20,array_gap_pt=2)])
+
+    def test_customer_art_alone_cannot_override_locked_panel_rules(self):
+        with self.assertRaisesRegex(ValueError,'explicit user authorization'):
+            self.fit([panel('a',20,20,array_gap_pt=2,array_spacing_evidence='Customer drawing shows separate panels.')])
 
     def test_stepped_array_keeps_missing_cell(self):
         out,report=self.fit([panel('a',20,20,array_id='roof',array_cell=[0,0]),panel('b',32,20,array_id='roof',array_cell=[1,0]),panel('c',20,28,array_id='roof',array_cell=[0,1])])

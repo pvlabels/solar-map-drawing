@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.2.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.2.1. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 

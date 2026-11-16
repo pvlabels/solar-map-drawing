@@ -14,6 +14,8 @@ Deliver **one WO-named SVG per order**, retaining a confirmed single-item suffix
 
 Read all topics before drawing:
 
+The solar panel rules in the production reference are locked; change or override them only when the user explicitly requests it.
+
 - [PDF in chat, SVG back](drawing-rules-workflow.md)
 - [Read the sales order and establish zones first](drawing-rules-order-and-zones.md)
 - [Find the correct map and item](drawing-rules-source-selection.md)

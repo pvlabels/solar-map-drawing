@@ -610,6 +610,7 @@ def uniform_rooftop_modules(modules, mapped, roof_edges, gap, equipment_polygons
         spacing=[float(el.get('array_gap_pt',0)) for el in specs]
         if any(not math.isfinite(s) or s<0 for s in spacing) or max(spacing)-min(spacing)>1e-7:raise ValueError('An array needs one nonnegative array_gap_pt value')
         if spacing[0] and not all(el.get('array_spacing_evidence') for el in specs):raise ValueError('Separated panels need explicit array_spacing_evidence')
+        if spacing[0] and not all(el.get('array_spacing_authorization')=='user' for el in specs):raise ValueError('Panel rules are locked: separated panels need explicit user authorization, not source artwork or notes')
         cells=[el.get('array_cell') for el in specs]
         if any(cell is not None for cell in cells):
             if not all(isinstance(cell,list) and len(cell)==2 and all(type(n) is int for n in cell) for cell in cells):raise ValueError('Supply an integer array_cell [long_axis_index, short_axis_index] on every individual module in the array')

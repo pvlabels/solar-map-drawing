@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version **3.2.0** packages three skills in the same private workspace plugin:
+Version **3.2.1** packages three skills in the same private workspace plugin:
 
 | Skill | Invocation | Output |
 | --- | --- | --- |
