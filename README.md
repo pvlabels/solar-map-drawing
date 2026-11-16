@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version **3.1.0** packages three skills in the same private workspace plugin:
+Version **3.2.0** packages three skills in the same private workspace plugin:
 
 | Skill | Invocation | Output |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ Version **3.1.0** packages three skills in the same private workspace plugin:
 | Solar Map With Labels | `$solar-map-labeled` | Map wording and direct arrows, without placard finishing. |
 | Finished Solar Map | `$solar-map-drawing` | Labeled map, source-confirmed caution wording, cutline and footer. |
 
-All three use the shared rules, renderer and vector assets under `plugins/solar-map-drawing/skills/solar-map-drawing/`. Rooftop modules share one size per map at 1.25 pt; interior walls are 1 pt, exterior perimeters 2 pt, and streets are horizontal or vertical. The original skill name remains the finished version. The host must provide Python/file execution; no separate model API key is required. Source interpretation and visual review remain agent-assisted.
+All three use the shared rules, renderer and vector assets under `plugins/solar-map-drawing/skills/solar-map-drawing/`. Panels within each countable array touch edge-to-edge without overlapping interiors, unless explicitly specified otherwise. Joined grids can shrink around their fixed array centers to keep 1 pt visible clearance from walls, roof lines and equipment. Modules share one size per map at 1.25 pt; interior walls are 1 pt, exterior perimeters 2 pt, and streets are horizontal or vertical. The original skill name remains the finished version. The host must provide Python/file execution; no separate model API key is required. Source interpretation and visual review remain agent-assisted.
 
 ## Workspace setup
 

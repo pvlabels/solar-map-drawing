@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.1.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.2.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 
@@ -23,6 +23,8 @@ The order helper associates readable packing-slip rows with their item code, SKU
 Twelve measured size profiles and source-specific warning styles provide starting points. The common 0.05-inch production reduction is not universal: the measured 5 by 7.75 family retains its full height. Unknown sizes/materials require confirmed production dimensions. Warning length, corner titles and lower notes change the available map/callout region. Footer identifiers retain the exact SKU, WO digits and item code. Requested holes require confirmed dimensions and positions. The renderer rejects artwork crossing reserved zones instead of enlarging the cutline or clipping away content. It does not automatically solve callout placement or certify electrical wording.
 
 All map stroke weights remain fixed in physical points. Cutlines use the measured cyan 0.001 pt convention; footer text uses 5 pt red. Editable text-only horizontal matrices preserve source-confirmed condensed typography. Output contains no groups, clips, masks, invisible helper paths or white underlays. Existing map-only scenes remain supported for revisions; new orders begin with confirmed size metadata.
+
+Panels within each countable array share exact edges without overlapping interiors. The renderer compacts and, if necessary, shrinks joined grids about fixed array centers while retaining counts, bearings and missing cells. It checks 1 pt visible clearance to exterior/interior walls, roof lines and normalized equipment rectangles. Individual panel centers may shift within their own array. Explicit array IDs/cells disambiguate source groups; requested panel spacing needs recorded evidence. Shared borders export once at 1.25 pt. Schematic source fields remain schematic. Run `python -m unittest discover -s tests -v` from the repository root for the panel-fitting checks.
 
 ## Callout and road review corrections
 

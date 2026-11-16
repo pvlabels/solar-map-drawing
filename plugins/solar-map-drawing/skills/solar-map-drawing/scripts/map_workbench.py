@@ -545,75 +545,152 @@ def clearance_edges(paths):
     return result
 
 
-def uniform_rooftop_modules(modules, mapped, roof_edges, gap):
-    """One physical short/long size per map, with centers and bearings retained."""
+def uniform_rooftop_modules(modules, mapped, roof_edges, gap, equipment_polygons=(), equipment_gap=1):
+    """Compact countable arrays around fixed anchors; shrink their joined grids."""
+    if not modules:return None
     footprints=[]
     for el in mapped:
-        if el['role']!='building':continue
-        try:footprints.extend(closed_polygons(el['paths'],el['id']))
-        except ValueError:pass
-    rooftop=[]
-    for m in modules:
-        el=mapped[m['element']];poly=m['original'];center=tuple(sum(p[j] for p in poly)/len(poly) for j in (0,1))
+        if el['role']=='building':
+            try:footprints.extend(closed_polygons(el['paths'],el['id']))
+            except ValueError:pass
+    for index,m in enumerate(modules):
+        el=mapped[m['element']];poly=m['original']
+        if len(poly)!=4:raise ValueError('Countable modules need four reviewed corners for rectangular array fitting')
+        center=tuple(sum(p[j] for p in poly)/4 for j in (0,1))
         surface=el.get('mount_surface')
         if surface not in (None,'roof','ground'):raise ValueError('Solar mount_surface must be roof or ground')
-        if surface=='ground' or (surface is None and not any(inside_polygon(center,p) for p in footprints)):continue
-        if len(poly)!=4:raise ValueError('Rooftop modules need four reviewed corners for common rectangular sizing')
         edges=[(math.dist(a,b),a,b) for a,b in zip(poly,poly[1:]+poly[:1])]
-        longest,a,b=max(edges,key=lambda q:q[0]);u=tuple((b[j]-a[j])/longest for j in (0,1))
-        m.update(rooftop=True,center=center,axis=u)
-        m['short']=min(q[0] for q in edges);m['long']=longest;rooftop.append(m)
-    if not rooftop:return None
-    short=statistics.median(m['short'] for m in rooftop);long=statistics.median(m['long'] for m in rooftop)
+        longest,a,b=max(edges,key=lambda q:q[0]);axis=tuple((b[j]-a[j])/longest for j in (0,1))
+        if axis[0 if abs(axis[0])>=abs(axis[1]) else 1]<0:axis=tuple(-v for v in axis)
+        m.update(center=center,axis=axis,short=min(q[0] for q in edges),long=longest,
+                 rooftop=surface=='roof' or (surface is None and any(inside_polygon(center,p) for p in footprints)))
+        if m['short']<1e-7:raise ValueError('Degenerate module outline; verify the source corners')
+        explicit=el.get('array_id')
+        if explicit is not None and (not isinstance(explicit,str) or not explicit.strip()):raise ValueError('array_id must be a nonempty source-confirmed identifier')
+        m['array_key']=('explicit',explicit) if explicit is not None else ('inferred',index)
+    short=statistics.median(m['short'] for m in modules);long=statistics.median(m['long'] for m in modules)
+    # Legacy scenes may omit array IDs. Join only clearly adjacent, same-bearing
+    # modules, never across a roof/wall, surface, or explicit array identity.
+    parents=list(range(len(modules)))
+    def find(i):
+        while parents[i]!=i:parents[i]=parents[parents[i]];i=parents[i]
+        return i
+    for i,m in enumerate(modules):
+        if m['array_key'][0]=='explicit':continue
+        for j,n in enumerate(modules[:i]):
+            if n['array_key'][0]=='explicit' or m['rooftop']!=n['rooftop']:continue
+            if mapped[m['element']].get('structure_id')!=mapped[n['element']].get('structure_id'):continue
+            if abs(cross(m['axis'],n['axis']))>math.sin(math.radians(3)):continue
+            u=m['axis'];v=(-u[1],u[0]);delta=tuple(m['center'][k]-n['center'][k] for k in (0,1))
+            dx=abs(sum(delta[k]*u[k] for k in (0,1)));dy=abs(sum(delta[k]*v[k] for k in (0,1)))
+            adjacent=(.55*long<=dx<=1.35*long and dy<=.18*short) or (.55*short<=dy<=1.35*short and dx<=.18*long)
+            if adjacent and not any(segments_distance(m['center'],n['center'],a,b)<1e-7 for a,b,_ in roof_edges):parents[find(i)]=find(j)
+    arrays={}
+    for i,m in enumerate(modules):
+        if m['array_key'][0]=='inferred':m['array_key']=('inferred',find(i))
+        arrays.setdefault(m['array_key'],[]).append(m)
+    def inferred_cells(values,dimension):
+        levels=[]
+        for value in sorted(values):
+            if not levels or value-levels[-1][-1]>.18*dimension:levels.append([value])
+            else:levels[-1].append(value)
+        centers=[statistics.mean(level) for level in levels]
+        distances=[b-a for a,b in zip(centers,centers[1:])]
+        pitch=min(distances) if distances else dimension
+        if distances and not .55*dimension<=pitch<=1.35*dimension:raise ValueError('Ambiguous array spacing; supply reviewed array_id and array_cell metadata')
+        indices=[round((value-centers[0])/pitch) for value in values]
+        if any(abs(value-(centers[0]+cell*pitch))>.18*dimension for value,cell in zip(values,indices)):
+            raise ValueError('Irregular array grid; supply reviewed array_cell metadata rather than guessing missing cells')
+        return indices
+    groups=[]
+    for key,members in arrays.items():
+        u=members[0]['axis'];v=(-u[1],u[0])
+        if any(abs(cross(u,m['axis']))>math.sin(math.radians(3)) for m in members):raise ValueError('One array mixes panel bearings; split source-confirmed groups before fitting')
+        specs=[mapped[m['element']] for m in members]
+        spacing=[float(el.get('array_gap_pt',0)) for el in specs]
+        if any(not math.isfinite(s) or s<0 for s in spacing) or max(spacing)-min(spacing)>1e-7:raise ValueError('An array needs one nonnegative array_gap_pt value')
+        if spacing[0] and not all(el.get('array_spacing_evidence') for el in specs):raise ValueError('Separated panels need explicit array_spacing_evidence')
+        cells=[el.get('array_cell') for el in specs]
+        if any(cell is not None for cell in cells):
+            if not all(isinstance(cell,list) and len(cell)==2 and all(type(n) is int for n in cell) for cell in cells):raise ValueError('Supply an integer array_cell [long_axis_index, short_axis_index] on every individual module in the array')
+        else:
+            xs=[sum(m['center'][k]*u[k] for k in (0,1)) for m in members];ys=[sum(m['center'][k]*v[k] for k in (0,1)) for m in members]
+            cells=list(zip(inferred_cells(xs,long),inferred_cells(ys,short)))
+        if len({tuple(cell) for cell in cells})!=len(cells):raise ValueError('Duplicate/ambiguous array cells; verify module count and assign source-confirmed grid cells')
+        if not spacing[0]:
+            occupied={tuple(cell) for cell in cells};pending=[next(iter(occupied))];connected=set(pending)
+            while pending:
+                x,y=pending.pop()
+                for neighbor in ((x-1,y),(x+1,y),(x,y-1),(x,y+1)):
+                    if neighbor in occupied and neighbor not in connected:connected.add(neighbor);pending.append(neighbor)
+            if connected!=occupied:raise ValueError('Array cells must connect edge-to-edge; split separate source groups without filling missing cells')
+        anchor=tuple(statistics.mean(m['center'][k] for m in members) for k in (0,1))
+        mean_cell=tuple(statistics.mean(cell[k] for cell in cells) for k in (0,1))
+        for m,cell in zip(members,cells):m['cell']=tuple(cell)
+        groups.append({'key':key,'members':members,'axis':u,'normal':v,'anchor':anchor,'mean_cell':mean_cell,'spacing':spacing[0]})
     def polygons(scale):
-        result=[]
-        for m in rooftop:
-            u=m['axis'];v=(-u[1],u[0]);c=m['center']
-            result.append([(c[0]+u[0]*x+v[0]*y,c[1]+u[1]*x+v[1]*y)
-                           for x,y in ((-long*scale/2,-short*scale/2),(long*scale/2,-short*scale/2),
-                                       (long*scale/2,short*scale/2),(-long*scale/2,short*scale/2))])
-        return result
+        result={}
+        for group in groups:
+            u,v=group['axis'],group['normal'];extra=ROLES['solar']+group['spacing'] if group['spacing'] else 0
+            for m in group['members']:
+                x=(m['cell'][0]-group['mean_cell'][0])*(long*scale+extra)
+                y=(m['cell'][1]-group['mean_cell'][1])*(short*scale+extra)
+                c=tuple(group['anchor'][k]+u[k]*x+v[k]*y for k in (0,1))
+                result[id(m)]=[(c[0]+u[0]*a+v[0]*b,c[1]+u[1]*a+v[1]*b)
+                               for a,b in ((-long*scale/2,-short*scale/2),(long*scale/2,-short*scale/2),(long*scale/2,short*scale/2),(-long*scale/2,short*scale/2))]
+        return [result[id(m)] for m in modules]
     def interiors_overlap(a,b):
         for poly in (a,b):
             for c,d in zip(poly,poly[1:]+poly[:1]):
-                n=(-(d[1]-c[1]),d[0]-c[0]);pa=[sum(p[j]*n[j] for j in (0,1)) for p in a];pb=[sum(p[j]*n[j] for j in (0,1)) for p in b]
+                n=(-(d[1]-c[1]),d[0]-c[0]);pa=[sum(p[k]*n[k] for k in (0,1)) for p in a];pb=[sum(p[k]*n[k] for k in (0,1)) for p in b]
                 if min(max(pa),max(pb))-max(min(pa),min(pb))<=1e-7:return False
         return True
     def valid(polys):
         for i,p in enumerate(polys):
             if any(polygon_segment_distance(p,a,b)<gap+ROLES['solar']/2+r-1e-7 for a,b,r in roof_edges):return False
+            if any(polygon_distance(p,q)<equipment_gap+(ROLES['solar']+ROLES['equipment'])/2-1e-7 for q in equipment_polygons):return False
             bb=bounds(p)
-            for q in polys[:i]:
+            for j,q in enumerate(polys[:i]):
+                if modules[i]['array_key']==modules[j]['array_key']:continue  # Unique grid cells cannot overlap.
                 qb=bounds(q)
                 if bb[0]>qb[2]+1.5 or qb[0]>bb[2]+1.5 or bb[1]>qb[3]+1.5 or qb[1]>bb[3]+1.5:continue
                 distance=polygon_distance(p,q)
-                # Exact shared borders/corners are valid. Close parallel double
-                # strokes and overlapping module interiors are not.
                 if distance<1e-6 and not interiors_overlap(p,q):continue
                 if distance<ROLES['solar']+.25-1e-7:return False
         return True
+    low=max((ROLES['solar']+.25)/short,(ROLES['solar']+.25)/long)
+    if low>1:raise ValueError('Panels are too small for a visible 1.25 pt outline; increase map scale')
     scale=1.0;polys=polygons(scale)
     if not valid(polys):
-        low=max((ROLES['solar']+.25)/short,(ROLES['solar']+.25)/long,
-                max(math.sqrt(abs(polygon_area(m['original']))*.20/(short*long)) for m in rooftop))
-        if low>=1 or not valid(polygons(low)):
-            raise ValueError('Uniform rooftop panel size cannot clear roof/neighbor strokes; review placement or increase map scale')
-        high=1.0
+        # Interior obstacles can make validity non-monotonic. Search downward,
+        # then refine the first valid interval instead of assuming the smallest fits.
+        high=1.0;found=False
+        for step in range(1,129):
+            trial=1-(1-low)*step/128
+            if valid(polygons(trial)):scale=trial;found=True;break
+            high=trial
+        if not found:raise ValueError('Joined panel arrays cannot retain wall/equipment clearances; review array cells/anchor or increase map scale')
         for _ in range(34):
-            mid=(low+high)/2
-            if valid(polygons(mid)):low=mid
+            mid=(scale+high)/2
+            if valid(polygons(mid)):scale=mid
             else:high=mid
-        scale=low;polys=polygons(scale)
-    for m,p in zip(rooftop,polys):m['polygon']=p
-    return {'module_count':len(rooftop),'short_long_size_pt':[short*scale,long*scale],
-            'common_scale':scale,'centers_preserved':True,'stroke_pt':ROLES['solar']}
+        polys=polygons(scale)
+    for m,p in zip(modules,polys):m['polygon']=p;m['array_fitted']=True
+    return {'module_count':len(modules),'rooftop_module_count':sum(m['rooftop'] for m in modules),
+            'short_long_size_pt':[short*scale,long*scale],'common_scale':scale,'centers_preserved':False,
+            'array_anchors_preserved':True,'stroke_pt':ROLES['solar'],
+            'arrays':[{'id':str(g['key'][1]),'grouping':g['key'][0],'module_count':len(g['members']),
+                       'anchor_pt':list(g['anchor']),'cells':[list(m['cell']) for m in g['members']],
+                       'panel_gap_pt':g['spacing'],'shared_edges_required':not bool(g['spacing'])} for g in groups]}
 
 
 def production_elements(elements, transform, settings=None):
-    """Keep source evidence untouched; inset only final individual solar outlines."""
+    """Keep source evidence untouched; fit joined arrays against final obstacles."""
     settings=settings or {}
     gap=float(settings.get('roof_gap_pt',settings.get('panel_gap_pt',1)))
-    if not math.isfinite(gap) or gap<=0: raise ValueError('Production panel gap must be positive')
+    if not math.isfinite(gap) or gap<1: raise ValueError('Panel/roof/wall visible clearance must be at least 1 pt')
+    equipment_gap=float(settings.get('equipment_gap_pt',1))
+    if not math.isfinite(equipment_gap) or equipment_gap<1:raise ValueError('Panel/equipment visible clearance must be at least 1 pt')
     mapped=[{**el,'paths':[transform_commands(p,transform) for p in el['paths']]} for el in elements]
     for el in mapped:
         if el['role']=='solar_field' and not el.get('representation_evidence'):
@@ -628,32 +705,11 @@ def production_elements(elements, transform, settings=None):
         if el['role']!='solar': continue
         for poly in closed_polygons(el['paths'],el['id']):
             modules.append({'element':ei,'original':poly,'inset':[0.0]*len(poly)})
-    rooftop=uniform_rooftop_modules(modules,mapped,roof_edges,gap)
-    # Adjacent panels may share edges. Inset only edges threatened by roof/wall
-    # strokes; untouched source grid divisions stay in their original positions.
-    for attempt in range(24):
-        for m in modules:
-            if m.get('rooftop'):continue
-            try: m['polygon']=inset_polygon(m['original'],m['inset'])
-            except ValueError as exc: raise ValueError(f"{mapped[m['element']]['id']}: {exc}") from exc
-        extra=[[0.0]*len(m['original']) for m in modules]
-        for i,m in enumerate(modules):
-            if m.get('rooftop'):continue
-            for a,b,radius in roof_edges:
-                deficit=gap+ROLES['solar']/2+radius-polygon_segment_distance(m['polygon'],a,b)
-                if deficit>1e-5:
-                    edges=list(zip(m['original'],m['original'][1:]+m['original'][:1]))
-                    parallel=[j for j,(c,d) in enumerate(edges)
-                              if abs(cross((d[0]-c[0],d[1]-c[1]),(b[0]-a[0],b[1]-a[1])))
-                              <1e-5*math.dist(c,d)*math.dist(a,b)]
-                    choices=parallel or list(range(len(edges)))
-                    distances={j:segments_distance(*edges[j],a,b) for j in choices}
-                    nearest=min(distances.values())
-                    for j in choices:
-                        if distances[j]<=nearest+1e-5: extra[i][j]=max(extra[i][j],deficit+.01)
-        if not any(any(edge) for edge in extra): break
-        for m,delta in zip(modules,extra): m['inset']=[x+y for x,y in zip(m['inset'],delta)]
-    else: raise ValueError('Solar production clearances remain unresolved; review module boundaries and roof crossings')
+    # Fit against the actual 1.5 pt production rectangles, not customer glyphs.
+    equipment_mapped,_=normalize_equipment(mapped,transform)
+    equipment_polygons=[poly for el in equipment_mapped if el['role']=='equipment' for poly in closed_polygons(el['paths'],el['id'])]
+    rooftop=uniform_rooftop_modules(modules,mapped,roof_edges,gap,equipment_polygons,equipment_gap)
+    # Rebuild countable panels from the fitted grids, never per-edge insets.
     for el in mapped:
         if el['role']=='solar': el['paths']=[]
     for m in modules:
@@ -669,9 +725,11 @@ def production_elements(elements, transform, settings=None):
                 if any(segments_distance(a,b,c,d)<gap+ROLES['solar_field']/2+radius-1e-5
                        for c,d,radius in roof_edges):
                     raise ValueError(f"{el['id']}: schematic array strokes need reviewed roof clearance; do not substitute invented modules")
+                if any(polygon_segment_distance(poly,a,b)<equipment_gap+(ROLES['solar_field']+ROLES['equipment'])/2-1e-5 for poly in equipment_polygons):
+                    raise ValueError(f"{el['id']}: schematic array strokes need reviewed equipment clearance")
     return mapped, {'gap_pt':gap,'roof_gap_pt':gap,'panel_to_panel_gap_required':False,
                     'module_count':len(modules),'module_insets_pt':[m['inset'] for m in modules],
-                    'uniform_rooftop':rooftop,
+                    'uniform_rooftop':rooftop,'uniform_modules':rooftop,'equipment_gap_pt':equipment_gap,
                     'schematic_field_elements':sum(el['role']=='solar_field' for el in mapped)}
 
 
@@ -1044,6 +1102,14 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
                 if label['target_element'] not in (equipment_targets or {}):
                     raise ValueError('Callout target_element must identify a production equipment rectangle')
                 target=equipment_targets[label['target_element']]
+            if label.get('array_element'):
+                choices=(array_targets or {}).get(label['array_element'])
+                if not choices:raise ValueError('Array callout needs a confirmed solar/solar_field element')
+                # Countable module centers may move while their array compacts.
+                # Keep the original source target as evidence; aim at production.
+                if label.get('_array_module_target'):
+                    centers=[tuple(sum(p[k] for p in poly)/len(poly) for k in (0,1)) for poly,_ in choices]
+                    target=min(centers,key=lambda p:math.dist(p,target))
             side=label.get("side","right" if target[0]>(bbox[0]+bbox[2])/2 else "left")
             if side not in ("left","right","top","bottom"): raise ValueError("Invalid leader side")
             start={"left":(bbox[0]-4,(bbox[1]+bbox[3])/2),"right":(bbox[2]+4,(bbox[1]+bbox[3])/2),
@@ -1189,6 +1255,8 @@ def scene_artwork(scene, manifest):
            for e in production if e['role']=='equipment' for path in e['paths']]
     callouts=layout_callouts(scene.get("callouts",[]),scene.get('callout_layout'))
     for label in callouts:
+        if label.get('array_element'):
+            label['_array_module_target']=any(e['id']==label['array_element'] and e['role']=='solar' for e in production)
         if 'target' in label and not label.get('target_element'):
             target=transform(label['target'])
             matches=[item['id'] for item in equipment
