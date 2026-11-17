@@ -1,6 +1,8 @@
 ## Callouts
 
-Use uppercase Arial/Helvetica by default, preserving source-required wording, identifiers and intentional hierarchy. Retain supplied map-specific size requirements where supported; do not apply an unrelated placard's font size to every map label. In map-labeled and finished modes, include equipment callouts and source-established array/building/context labels, subject to the customer exception above. Plain `labels` carry map-specific notes without leaders. Map-only mode excludes all callouts and text; skip label routing entirely.
+This is the shared source for equipment/array arrow style, routing, spacing and crossing gaps. Scene-format and zone references link here instead of repeating these rules.
+
+Use uppercase Arial/Helvetica by default, preserving source-required wording, identifiers and intentional hierarchy, except for the standardized solar-array identification wording below. Retain supplied map-specific size requirements where supported; do not apply an unrelated placard's font size to every map label. In map-labeled and finished modes, include equipment callouts and source-established array/building/context labels, subject to the customer exception above. Plain `labels` carry map-specific notes without leaders. Map-only mode excludes all callouts and text; skip label routing entirely.
 
 All text **below 10 pt** uses small-engraving red **#ed1c24**, including equipment/array labels, road names, qualifiers and inset captions. Exactly 10 pt retains the regular artwork color. This is a production color convention; do not shrink text merely to trigger it. Footer remains red at its specified size. The exporter applies this threshold to every editable text object, including rotated road lettering. Map-only mode exports no text objects.
 
@@ -11,4 +13,17 @@ All text **below 10 pt** uses small-engraving red **#ed1c24**, including equipme
 - **Arrowheads never touch targets.** Start with at least 3 pt target setback and ensure the whole head clears actual target/nearby strokes by 2 pt. A tip must identify its intended device, not an intervening wall. Choose another approach when blocked; do not pull the head back past an unrelated edge. Review crowded targets at high zoom and reading size.
 - Keep **2 pt visible clearance between entire arrowheads and between a head and any other leader**. Separate approaches or deliberately stagger heads where they still identify their own targets. Never shrink Arrow 2, move equipment or accept merged heads to force a fit. Keep **6 pt of visible straight shaft behind the rearmost head wing** before any elbow; no bend may sit inside a head. Remove tiny routing jogs (under 4 pt between bends). The renderer tries bounded alternatives and rejects unresolved head collisions or short terminal runs; reroute labels/leaders and review again.
 - An array label outside its actual panel/array footprint **must have a leader and Arrow 2 pointing to that specific array**. A nearby floating label or an arrow stopped at the house perimeter is insufficient. Use `array_element` to bind the intended `solar`/`solar_field` target; choose a clear approach to the array, with the usual target gap. Text wholly inside its own array can omit a leader. Preserve TFS's supplied-label-only exception.
-- At necessary geometry crossings use actual trimmed vector clearances, not stacked white strokes. Keep routes out of unrelated equipment; legal angles alone do not establish a good route.
+- **Every time an arrow/leader passes over a line, place an opaque white box or backing stroke behind the arrow so a visible gap separates the crossing lines.** The backing sits above the crossed line and immediately below its own colored leader; keep it as an editable vector in the SVG. The renderer uses a **5 pt white backing stroke behind the 0.75 pt shaft**, including at crossings over earlier leaders. Preserve the crossed line's underlying geometry. This backing is required even for legacy scenes with `clearance: false`; do not disable it or substitute a break in the foreground arrow. Keep routes out of unrelated equipment and text, and retain the target/head clearances above.
+
+## Solar-array callout wording
+
+Only these two exact uppercase phrases are allowed for solar-array identification callouts:
+
+- **SOLAR ARRAY ON ROOFTOP** — for a source-confirmed rooftop array.
+- **GROUND MOUNT SOLAR ARRAY** — for a source-confirmed ground-mounted array.
+
+Keep the wording exactly as written, including singular `ARRAY`. Line breaks may wrap the phrase without changing its words or order. Do not use abbreviations, plural variants, alternate descriptions, or append extra wording to these callouts. The same wording applies to an identification label placed inside its array without a leader. Separate arrays may repeat the applicable phrase with their own target-bound leaders.
+
+This rule overrides source/customer variations in array identification wording. Retain source-required operational warnings, existing/new distinctions, identifiers and shutdown notes separately as map notes or a legend; they do not create a third array-callout phrase. Determine roof versus ground from source evidence; do not guess an unresolved mounting location.
+
+The existing output scope and TFS supplied-label-only rule still govern whether to include an array callout. When included, use one of the two phrases above. Panel geometry, counts, spacing, clearances and stroke weights remain governed by the production rules.

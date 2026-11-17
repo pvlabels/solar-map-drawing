@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.3.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.3.5. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 
@@ -22,13 +22,13 @@ The order helper associates readable packing-slip rows with their item code, SKU
 
 Twelve measured size profiles and source-specific warning styles provide starting points. The common 0.05-inch production reduction is not universal: the measured 5 by 7.75 family retains its full height. Unknown sizes/materials require confirmed production dimensions. Warning length, corner titles and lower notes change the available map/callout region. Footer identifiers retain the exact SKU, WO digits and item code. Requested holes require confirmed dimensions and positions. The renderer rejects artwork crossing reserved zones instead of enlarging the cutline or clipping away content. It does not automatically solve callout placement or certify electrical wording.
 
-All map stroke weights remain fixed in physical points. Cutlines use the measured cyan 0.001 pt convention; footer text uses 5 pt red. Editable text-only horizontal matrices preserve source-confirmed condensed typography. Output contains no groups, clips, masks, invisible helper paths or white underlays. Existing map-only scenes remain supported for revisions; new orders begin with confirmed size metadata.
+All map stroke weights remain fixed in physical points. Cutlines use the measured cyan 0.001 pt convention; footer text uses 5 pt red. Editable text-only horizontal matrices preserve source-confirmed condensed typography. Output contains no groups, clips, masks or invisible helper paths; editable white leader backing strokes provide crossing gaps. Existing map-only scenes remain supported for revisions; new orders begin with confirmed size metadata.
 
 Panels within each countable array share exact edges without overlapping interiors. The renderer compacts and, if necessary, shrinks joined grids about fixed array centers while retaining counts, bearings and missing cells. It checks 1 pt visible clearance to exterior/interior walls, roof lines and normalized equipment rectangles. Individual panel centers may shift within their own array. Explicit array IDs/cells disambiguate source groups; requested panel spacing needs recorded evidence. Shared borders export once at 1.25 pt. Schematic source fields remain schematic. Run `python -m unittest discover -s tests -v` from the repository root for the panel-fitting checks.
 
 ## Callout and road review corrections
 
-Arrowheads keep 2 pt clearance to other heads and other leaders. Last bends stay behind the full head plus 6 pt of visible straight shaft; tiny intermediate jogs are rejected. Bounded alternatives may stagger heads without moving their targets; unresolved routes stop rendering. Array labels outside their footprint need a target-bound arrow to the actual array, not an intervening house edge. Streets retain the correct source side, with a cardinal (horizontal/vertical only) solid/dashed pair and centered parallel name. Their schematic direction may differ from the source; buildings and north retain their geometry/bearing. All editable type below 10 pt exports in small-engraving red #ed1c24; exactly 10 pt retains the regular artwork color. Road text can rotate independently without transforming map strokes.
+Arrow style, routing, target binding and crossing gaps follow the shared [Callouts rules](skills/solar-map-drawing/references/drawing-rules-callouts.md). Every leader has editable white backing to create a visible gap wherever it passes over another line; the crossed geometry is preserved. Streets retain the correct source sides and count, including corner lots with two roads or source-confirmed additional streets. New road layouts span the usable drawing area with proportional lanes/dashes, joined inner corners, solid/dashed edges and parallel names; see [Roads](skills/solar-map-drawing/references/drawing-rules-roads.md). Their schematic direction may differ from the source; buildings and north retain their geometry/bearing. All editable type below 10 pt exports in small-engraving red #ed1c24; exactly 10 pt retains the regular artwork color. Road text can rotate independently without transforming map strokes.
 
 ## Runtime
 
