@@ -26,6 +26,8 @@ Use **Arial Standard**, uppercase for map identification. Detail-size choices fr
 
 Horizontal font scaling is **70% through 100%, in 5% steps**: `width_scale` 0.70, 0.75, 0.80, 0.85, 0.90, 0.95 or 1.00. Do not stretch type taller, skew it, or use arbitrary compression such as 81%. Reflow the text and review the layout when replacing old values. Arrow-attached callouts are left- or right-justified toward their leader: a leader on the text's right uses right justification; a leader on its left uses left justification. Road names and north N use their own alignment rules.
 
+**Wrapped text stays one block:** when one label, callout, heading, paragraph or operational note continues on the next line, keep all of its lines in **one editable text object**. Use line breaks within that object; do not export separate text objects for its lines, words or letters, and do not outline the text. Preserve reading order, alignment, font size and line spacing so selecting/moving/editing the block keeps its lines together. Separate devices, unrelated notes, headings versus body paragraphs, and separate footer identifiers remain separate blocks even when nearby. In SVG, use one `<text>` element with positioned `<tspan>` lines; this is a text block, not a group of detached text objects.
+
 ## Production process and colors
 
 Confirm the ordered manufacturing process before finishing. Set `production.process` to `laser`, `metal` or `label`; the existing laser workflow remains the legacy default, not evidence of an unknown material. A material name or SKU from another item cannot choose this map's process.

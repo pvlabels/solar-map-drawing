@@ -126,9 +126,19 @@ def font_scale(value):
     return scale
 
 
+def text_lines(text):
+    """Hard wraps belong to the same logical block, including explicit blank lines."""
+    values=[text] if isinstance(text,str) else text
+    if not isinstance(values,(list,tuple)) or not values or not all(isinstance(v,str) for v in values):
+        raise ValueError('Text block needs a string or list of lines')
+    lines=[line for value in values for line in value.replace('\r\n','\n').replace('\r','\n').split('\n')]
+    if not any(lines):raise ValueError('Empty text block')
+    return lines
+
+
 def wrap(lines,size,width,scale=1):
     font=fitz.Font('helv');result=[]
-    if isinstance(lines,str):lines=[lines]
+    lines=text_lines(lines)
     for line in lines:
         if not isinstance(line,str) or not line.strip():raise ValueError('Warning lines must be nonempty source-confirmed text')
         current=''
@@ -141,11 +151,11 @@ def wrap(lines,size,width,scale=1):
         result.append(current)
     return result
 
-def text_record(text,x,y,size,anchor='middle',scale=1,role='warning'):
+def text_record(text,x,y,size,anchor='middle',scale=1,role='warning',block_id=None):
     scale=font_scale(scale)
     width=fitz.Font('helv').text_length(text,fontsize=size)*scale
     left=x-width*{'start':0,'middle':.5,'end':1}[anchor]
-    return {'text':text,'x':x,'y':y,'size_pt':size,'anchor':anchor,'width_scale':scale,'role':role,
+    return {'text':text,'x':x,'y':y,'size_pt':size,'anchor':anchor,'width_scale':scale,'role':role,'block_id':block_id,
             'bbox':[left,y-size*1.075,left+width,y+size*.299]}
 
 def plan(placard,job=None,manifest=None,output_mode=None,production=None):
@@ -206,11 +216,11 @@ def plan(placard,job=None,manifest=None,output_mode=None,production=None):
     records=[];hs=positive(style['heading_size_pt']);hscale=positive(style.get('heading_width_scale',1))
     headings=wrap(heading,hs,header_width,hscale)
     y=positive(style['heading_baseline_pt']);leading=positive(style.get('heading_leading_pt',hs*1.2))
-    for text in headings:records.append(text_record(text,x,y,hs,anchor,hscale));y+=leading
+    for text in headings:records.append(text_record(text,x,y,hs,anchor,hscale,block_id='warning-heading'));y+=leading
     gap=style.get('body_gap_pt',float(style.get('body_baseline_pt',style['heading_baseline_pt']+21))-style['heading_baseline_pt'])
     body_y=records[-1]['y']+positive(gap)
     bs=positive(style['body_size_pt']);bscale=positive(style.get('width_scale',1));body=wrap(lines,bs,header_width,bscale) if lines else []
-    for i,text in enumerate(body):records.append(text_record(text,x,body_y+i*positive(style['leading_pt']),bs,anchor,bscale))
+    for i,text in enumerate(body):records.append(text_record(text,x,body_y+i*positive(style['leading_pt']),bs,anchor,bscale,block_id='warning-body'))
     bottom=max(t['bbox'][3] for t in records)
     divider_y=bottom+4 if style.get('divider') else None
     note=placard.get('operational_note')
@@ -221,16 +231,16 @@ def plan(placard,job=None,manifest=None,output_mode=None,production=None):
         size=positive(note.get('size_pt',11));scale=positive(note.get('width_scale',.80 if style_id.startswith('tfs') else 1))
         ny=max(bottom+size+7,(divider_y or 0)+size+4)
         for i,text in enumerate(wrap(note['text'],size,width-2*inset,scale)):
-            records.append(text_record(text,width/2,ny+i*size*1.2,size,scale=scale,role='operational-note'))
+            records.append(text_record(text,width/2,ny+i*size*1.2,size,scale=scale,role='operational-note',block_id='operational-note'))
         bottom=max(t['bbox'][3] for t in records)
     footer_edge=footer_top
     bottom_records=[]
-    for block in reversed(bottom_notes):
+    for block_index,block in reversed(list(enumerate(bottom_notes))):
         if not block.get('evidence'):raise ValueError('Bottom warning/legend needs source evidence')
         size=positive(block.get('size_pt',11));scale=positive(block.get('width_scale',1))
         text=wrap(block['text'],size,width-2*inset,scale)
         baseline=footer_edge-6-size*.299-(len(text)-1)*size*1.2
-        local=[text_record(value,width/2,baseline+i*size*1.2,size,scale=scale,role='bottom-note') for i,value in enumerate(text)]
+        local=[text_record(value,width/2,baseline+i*size*1.2,size,scale=scale,role='bottom-note',block_id=f'bottom-note-{block_index}') for i,value in enumerate(text)]
         footer_edge=min(t['bbox'][1] for t in local)
         bottom_records[0:0]=local
     map_bottom=footer_edge-6 if bottom_records else footer_top
@@ -292,9 +302,27 @@ def prepare_scene(scene,manifest):
     return result,p
 
 def text_svg(record,color):
-    scale=record.get('width_scale',1);x=record['x']/scale
+    """One editable text object per block; tspans hold only its line positions."""
+    records=record if isinstance(record,list) else [record]
+    first=records[0];scale=first.get('width_scale',1);x=first['x']/scale
+    for item in records:
+        if any(item.get(k)!=first.get(k) for k in ('size_pt','width_scale','anchor','role')):
+            raise ValueError('A text block must retain one consistent text style')
     transform=f' transform="matrix({num(scale)} 0 0 1 0 0)"' if scale!=1 else ''
-    return f'<text data-role="{record["role"]}" x="{num(x)}" y="{num(record["y"])}" font-size="{num(record["size_pt"])}" font-family="Arial,Helvetica,sans-serif" text-anchor="{record["anchor"]}" fill="{color}"{transform}>{html.escape(record["text"])}</text>'
+    if len(records)==1:content=html.escape(first['text'])
+    else:
+        content=''.join(f'<tspan x="{num(item["x"]/scale)}" y="{num(item["y"])}">{html.escape(item["text"])}</tspan>' for item in records)
+    return f'<text data-role="{first["role"]}" x="{num(x)}" y="{num(first["y"])}" font-size="{num(first["size_pt"])}" font-family="Arial,Helvetica,sans-serif" text-anchor="{first["anchor"]}" fill="{color}"{transform}>{content}</text>'
+
+
+def text_blocks_svg(records,color):
+    blocks=[]
+    for record in records:
+        if blocks and record.get('block_id') and blocks[-1][0].get('block_id')==record['block_id']:
+            blocks[-1].append(record)
+        else:blocks.append([record])
+    return ''.join(text_svg(block,color) for block in blocks)
+
 
 def circle_path(cx,cy,r):
     k=r*.5522847498307936
@@ -313,11 +341,11 @@ def chrome_svg(p,color='#00a651'):
     else:d=f'M0 0 L{num(w)} 0 L{num(w)} {num(h)} L0 {num(h)} Z'
     out=[f'<path id="cutline" data-role="cutline" data-production-layer="{cut_layer}" d="{d}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>']
     for i,(cx,cy,r) in enumerate(p['holes']):out.append(f'<path id="hole-{i+1}" data-role="cutline" data-production-layer="{cut_layer}" d="{circle_path(cx,cy,r)}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>')
-    out.extend(text_svg(t,color) for t in p['header_records'])
-    out.extend(text_svg(t,color) for t in p.get('bottom_note_records',[]))
+    out.append(text_blocks_svg(p['header_records'],color))
+    out.append(text_blocks_svg(p.get('bottom_note_records',[]),color))
     if p['divider_y'] is not None:
         y=p['divider_y'];out.append(f'<path data-role="warning-divider" d="M0 {num(y)} L{num(w)} {num(y)}" fill="none" stroke="{color}" stroke-width="0.5"/>')
-    out.extend(text_svg(t,p['footer_color']) for t in p['footer_records'])
+    out.append(text_blocks_svg(p['footer_records'],p['footer_color']))
     return ''.join(out)
 
 def validate_map_svg(body,box,p):
@@ -348,11 +376,16 @@ def validate_map_svg(body,box,p):
                 points=[(x+dx,y+dy) for x,y in part];xs,ys=zip(*points)
                 bounds.append((fitz.Rect(min(xs)-pad,min(ys)-pad,max(xs)+pad,max(ys)+pad),'path',points,pad))
         elif tag=='text':
-            text=''.join(node.itertext());size=positive(node.get('font-size',12));x=float(node.get('x',0));y=float(node.get('y',0))
-            r=text_record(text,x,y,size,node.get('text-anchor','start'))
-            l,t,rr,b=r['bbox'];a,bb,c,d,e,f=matrix
-            pts=[(a*xx+c*yy+e+dx,bb*xx+d*yy+f+dy) for xx,yy in ((l,t),(rr,t),(rr,b),(l,b))]
-            bounds.append((fitz.Rect(min(xx for xx,yy in pts),min(yy for xx,yy in pts),max(xx for xx,yy in pts),max(yy for xx,yy in pts)),'text',None,0))
+            lines=list(node) if len(node) else [node]
+            for line in lines:
+                if line is not node and (line.tag.split('}')[-1]!='tspan' or len(line)):
+                    raise ValueError('Text blocks require flat positioned tspans')
+                text=line.text or '';size=positive(node.get('font-size',13))
+                x=float(line.get('x',node.get('x',0)));y=float(line.get('y',node.get('y',0)))
+                r=text_record(text,x,y,size,node.get('text-anchor','start'))
+                l,t,rr,b=r['bbox'];a,bb,c,d,e,f=matrix
+                pts=[(a*xx+c*yy+e+dx,bb*xx+d*yy+f+dy) for xx,yy in ((l,t),(rr,t),(rr,b),(l,b))]
+                bounds.append((fitz.Rect(min(xx for xx,yy in pts),min(yy for xx,yy in pts),max(xx for xx,yy in pts),max(yy for xx,yy in pts)),'text',None,0))
     walk(ET.fromstring('<svg>'+body+'</svg>'))
     work=fitz.Rect(p['work_zone']);corner=fitz.Rect(p['reserved_header_corner']) if p['reserved_header_corner'] else None
     issues=[]

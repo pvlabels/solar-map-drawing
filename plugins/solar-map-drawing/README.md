@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.4.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.4.1. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 
@@ -55,3 +55,7 @@ All rooftop panels on each map have the same rectangular short/long dimensions a
 ## Version 3.4.0: consolidated map guidelines
 
 Integrated the user-approved MAP GUIDLINES.pdf requirements into the existing rule topics. Equipment style, placement and scene metadata now have one authoritative section. The PDF takes precedence for strokes, typography, process-specific colors and finishing; existing site fidelity, north-label orbit and exact array identification phrases remain. See the shared drawing-rule index for ownership and production handoff limits.
+
+## Version 3.4.1: intact wrapped text
+
+Each multiline callout, label or paragraph remains one editable text object with internal line breaks. Separate logical blocks remain separate. Export cleanup and multi-map translation preserve all lines and their spacing.

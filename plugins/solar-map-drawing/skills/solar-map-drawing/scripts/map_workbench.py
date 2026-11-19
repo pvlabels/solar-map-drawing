@@ -1023,8 +1023,7 @@ def draw_elements(elements, transform, color, warnings, box, voids=(), mount_edg
 def text_box(label):
     size=float(label.get("size_pt",13))
     if not math.isfinite(size) or size<8: raise ValueError("Map callout text must be at least 8 pt")
-    lines=label["text"] if isinstance(label["text"],list) else [label["text"]]
-    if not lines or not all(isinstance(line,str) and line for line in lines): raise ValueError("Empty label")
+    lines=placard_tools().text_lines(label["text"])
     font=fitz.Font("helv")
     stretch=float(label.get('width_scale',1))
     placard_tools().font_scale(stretch)
@@ -1216,10 +1215,9 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
                             "shaft_route":route,"text_bbox":bbox,"attachment_side":side,
                             "target_element":label.get('target_element'),'clearance':True,'backing_width_pt':5,'backing_color':backing_color,
                             'head_envelope':envelope,'visible_straight_shaft_pt':length-gap-head_depth})
-        for i,line in enumerate(lines):
-            stretch=float(label.get('width_scale',1))
-            text_transform=f' transform="matrix({n(stretch)} 0 0 1 0 0)"' if stretch!=1 else ''
-            texts.append(f'<text x="{n(label["x"]/stretch)}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,Helvetica,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}"{text_transform}>{html.escape(line)}</text>')
+        records=[placard_tools().text_record(line,label["x"],label["y"]+i*size*1.2,size,
+                  anchor,float(label.get('width_scale',1)),role='callout-text') for i,line in enumerate(lines)]
+        texts.append(placard_tools().text_svg(records,color))
     return '<g id="callout-leaders">'+"".join(leaders)+'</g><g id="callout-text">'+"".join(texts)+'</g>', targets
 
 
@@ -1316,15 +1314,13 @@ def scene_artwork(scene, manifest):
         size = float(label.get("size_pt", 13))
         if not math.isfinite(size) or size < 8 or not label.get("text"):
             raise ValueError("Map labels need nonempty text and at least 8 pt size")
-        lines = label["text"] if isinstance(label["text"], list) else [label["text"]]
+        lines = placard_tools().text_lines(label["text"])
         anchor = label.get("anchor", "middle")
         if anchor not in ("start", "middle", "end"):
             raise ValueError("Invalid label anchor")
-        for i, line in enumerate(lines):
-            stretch=float(label.get('width_scale',1))
-            if not math.isfinite(stretch) or stretch<=0:raise ValueError('Invalid label width scale')
-            text_transform=f' transform="matrix({n(stretch)} 0 0 1 0 0)"' if stretch!=1 else ''
-            body.append(f'<text x="{n(label["x"]/stretch)}" y="{n(label["y"]+i*size*1.2)}" font-family="Arial,sans-serif" font-size="{n(size)}" text-anchor="{anchor}" fill="{color}"{text_transform}>{html.escape(line)}</text>')
+        records=[placard_tools().text_record(line,label["x"],label["y"]+i*size*1.2,size,
+                  anchor,float(label.get('width_scale',1)),role='map-label') for i,line in enumerate(lines)]
+        body.append(placard_tools().text_svg(records,color))
     zone_check=None
     if zone_plan:
         zone_check=placard_tools().validate_map_svg(''.join(body),box,zone_plan)
@@ -1539,7 +1535,17 @@ def clean_export(svg):
         name=attrs.get('id') or attrs.get('data-element') or tag
         names[name]=names.get(name,0)+1
         attrs['id']=name if names[name]==1 else f'{name}-{names[name]}'
-        leaf=ET.Element(ns+tag,attrs); leaf.text=node.text; leaves.append(leaf)
+        leaf=ET.Element(ns+tag,attrs); leaf.text=node.text
+        if tag=='text':
+            for span in node:
+                if span.tag.split('}')[-1]!='tspan' or len(span) or set(span.attrib)-{'x','y'}:
+                    raise ValueError('Text blocks require flat tspans with line positions only')
+                child_attrs=dict(span.attrib)
+                if not text_matrix:
+                    child_attrs['x']=n(float(span.get('x',node.get('x',0)))+(dx+text_tx)/text_scale)
+                    child_attrs['y']=n(float(span.get('y',node.get('y',0)))+dy+text_ty)
+                child=ET.SubElement(leaf,ns+'tspan',child_attrs);child.text=span.text;child.tail=span.tail
+        leaves.append(leaf)
     walk(root)
     records=[]; by_owner={}; original_paths={}
     for owner,leaf in enumerate(leaves):
