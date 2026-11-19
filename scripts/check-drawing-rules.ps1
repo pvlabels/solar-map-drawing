@@ -4,6 +4,8 @@
 # (3.3.1), orbiting north labels (3.3.3), full-area roads (3.3.4), and
 # array wording (3.3.5) intentionally replace the narrow blocks listed below.
 # Renderer behavior is checked by python -m unittest discover -s tests -v.
+# v3.4.0 intentionally adopts the user's PDF specifications and consolidates
+# equipment guidance; the process/typography replacements have regression tests.
 param(
     [string]$SourceRef = 'ae46c293ea15e3edef497f983deeaa1fc4f76f84',
     [string]$ReferencesDirectory = (Join-Path $PSScriptRoot '../plugins/solar-map-drawing/skills/solar-map-drawing/references'),
@@ -31,7 +33,13 @@ $supersededPrefixes = @(
     'Final artwork must be loose editable paths/text:',
     'Draw streets **only at 0, 90, 180 or 270 degrees in the final output**.',
     'Retain the solid near edge plus parallel dashed outer edge.',
-    'Use uppercase Arial/Helvetica by default,'
+    'Use uppercase Arial/Helvetica by default,',
+    'Use the customer-art layout:',
+    '| Artwork | Physical stroke |',
+    'Fit geometry uniformly into the planned physical work zone;',
+    '- **Exterior versus interior walls:**',
+    'All text **below 10 pt**',
+    '- Use canonical **Illustrator Arrow 2 at 100% on 0.75 pt**'
 )
 
 function Get-Paragraphs([string]$Content) {

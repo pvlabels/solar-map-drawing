@@ -12,6 +12,8 @@ Preserve the same roof topology, panel counts, device locations, alignment and p
 
 Deliver **one WO-named SVG per order**, retaining a confirmed single-item suffix. Multiple items share one separated artboard with their individual physical sizes. Labeled and finished modes include visible item headings; map-only mode retains item identity in internal reports/object IDs and omits visible headings. Keep all inputs/scenes/QA outside the delivery folder and skill package.
 
+Rules from the user-supplied `MAP GUIDLINES.pdf` (7 pages; revised April 4, 2024) are integrated into the topics below. On November 19, 2026 the user explicitly selected the PDF specifications wherever they conflict with earlier saved settings. Pages 1-4 supply production requirements; pages 5-7 are examples, not permission to copy another job's geometry, warning, identity or alternate array wording. Current source facts and output-mode boundaries remain required. Keep each rule in its owning section and link there instead of creating a second guideline/equipment rule set.
+
 Read all topics before drawing:
 
 The solar panel rules in the production reference are locked; change or override them only when the user explicitly requests it.
@@ -20,7 +22,7 @@ The solar panel rules in the production reference are locked; change or override
 - [Read the sales order and establish zones first](drawing-rules-order-and-zones.md)
 - [Find the correct map and item](drawing-rules-source-selection.md)
 - [Trace without changing the site](drawing-rules-tracing.md)
-- [Production drawing rules](drawing-rules-production.md)
+- [Production drawing rules, typography, process colors and equipment](drawing-rules-production.md)
 - [Callouts](drawing-rules-callouts.md)
 - [Roads](drawing-rules-roads.md)
 - [Clean export and focused verification](drawing-rules-export.md)

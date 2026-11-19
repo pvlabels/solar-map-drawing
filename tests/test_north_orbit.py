@@ -46,12 +46,12 @@ class NorthOrbitTests(unittest.TestCase):
                 self.assertTrue(all(n.tag.split('}')[-1] in ('path','text') for n in nodes))
         self.assertLess(max(radii)-min(radii),.002)
 
-    def test_north_up_retains_existing_baseline(self):
+    def test_north_up_uses_arrow_15_and_25_pt_n(self):
         _,_,text,_=symbol(0)
-        self.assertAlmostEqual(float(text.get('y')),100+34+34*.52+4,places=3)
+        self.assertAlmostEqual(float(text.get('y')),100+11.45508*3+25+4,places=3)
 
     def test_glyph_clears_the_needle_at_every_bearing_and_multiple_sizes(self):
-        for height in (20,34,60):
+        for height in (22.91016,34.36524):
             for angle in range(0,360,5):
                 _,nodes,text,_=symbol(angle,height,snap_tolerance_deg=0)
                 path=next(n for n in nodes if n.tag.endswith('path'))

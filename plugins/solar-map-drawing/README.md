@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.3.5. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.4.0. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 
@@ -22,13 +22,13 @@ The order helper associates readable packing-slip rows with their item code, SKU
 
 Twelve measured size profiles and source-specific warning styles provide starting points. The common 0.05-inch production reduction is not universal: the measured 5 by 7.75 family retains its full height. Unknown sizes/materials require confirmed production dimensions. Warning length, corner titles and lower notes change the available map/callout region. Footer identifiers retain the exact SKU, WO digits and item code. Requested holes require confirmed dimensions and positions. The renderer rejects artwork crossing reserved zones instead of enlarging the cutline or clipping away content. It does not automatically solve callout placement or certify electrical wording.
 
-All map stroke weights remain fixed in physical points. Cutlines use the measured cyan 0.001 pt convention; footer text uses 5 pt red. Editable text-only horizontal matrices preserve source-confirmed condensed typography. Output contains no groups, clips, masks or invisible helper paths; editable white leader backing strokes provide crossing gaps. Existing map-only scenes remain supported for revisions; new orders begin with confirmed size metadata.
+Physical strokes, typography and process-specific colors follow [Production drawing rules](skills/solar-map-drawing/references/drawing-rules-production.md); cutline/bleed requirements follow [Zones](skills/solar-map-drawing/references/zone-layout.md). The SVG contains loose editable artwork with process-colored leader backing. Native Illustrator swatches/layers and print bleed need a verified production handoff.
 
 Panels within each countable array share exact edges without overlapping interiors. The renderer compacts and, if necessary, shrinks joined grids about fixed array centers while retaining counts, bearings and missing cells. It checks 1 pt visible clearance to exterior/interior walls, roof lines and normalized equipment rectangles. Individual panel centers may shift within their own array. Explicit array IDs/cells disambiguate source groups; requested panel spacing needs recorded evidence. Shared borders export once at 1.25 pt. Schematic source fields remain schematic. Run `python -m unittest discover -s tests -v` from the repository root for the panel-fitting checks.
 
 ## Callout and road review corrections
 
-Arrow style, routing, target binding and crossing gaps follow the shared [Callouts rules](skills/solar-map-drawing/references/drawing-rules-callouts.md). Every leader has editable white backing to create a visible gap wherever it passes over another line; the crossed geometry is preserved. Streets retain the correct source sides and count, including corner lots with two roads or source-confirmed additional streets. New road layouts span the usable drawing area with proportional lanes/dashes, joined inner corners, solid/dashed edges and parallel names; see [Roads](skills/solar-map-drawing/references/drawing-rules-roads.md). Their schematic direction may differ from the source; buildings and north retain their geometry/bearing. All editable type below 10 pt exports in small-engraving red #ed1c24; exactly 10 pt retains the regular artwork color. Road text can rotate independently without transforming map strokes.
+Use the shared [Callouts rules](skills/solar-map-drawing/references/drawing-rules-callouts.md) for Arrow 2, routing and process-colored crossing gaps, and [Roads](skills/solar-map-drawing/references/drawing-rules-roads.md) for full-area corner roads and outward street names. See [Equipment](skills/solar-map-drawing/references/drawing-rules-production.md#equipment) for the single source of device styling, placement and metadata.
 
 ## Runtime
 
@@ -45,9 +45,13 @@ The three entry skills live in `skills/solar-map-only`, `skills/solar-map-labele
 
 ## Customer-art direct layout
 
-Devices stay on the actual map with plain 1.5 pt rectangles and direct arrows to their complete wording. Numbered equipment keys, separate equipment strips, invented insets and replacement overview footprints are not fit shortcuts. Existing source device numbers and source-supplied detail views remain meaningful. Roof tracing must preserve corners, facets and shared junctions against a source overlay; annotations do not justify guessing or removing roof lines. A requested common warning paragraph is retained across the named items, with a requested multiple-sources small line below it. The head-clearance calculation uses the actual triangular envelope to avoid unnecessary shifts beside sloping walls; physical gaps and the canonical head shape remain unchanged.
+The single [Equipment section](skills/solar-map-drawing/references/drawing-rules-production.md#equipment) governs device representation and source-bound placement. Roof tracing must preserve corners, facets and shared junctions against a source overlay. Warning wording and punctuation must match the current customer artwork.
 
 
 ## Uniform rooftop panels, interior walls and cardinal streets
 
 All rooftop panels on each map have the same rectangular short/long dimensions and 1.25 pt strokes, allowing portrait/landscape rotation. The shared renderer retains original centers/counts and reduces one common size for clearance rather than shrinking individual panels differently. Ground arrays retain their source representation. Shared internal building dividers use the `wall` role at 1 pt; only exterior perimeters use 2 pt, and all equipment remains 1.5 pt. Streets are schematic horizontal/vertical paths only, retaining the correct side of the property. These rules apply to all three skills.
+
+## Version 3.4.0: consolidated map guidelines
+
+Integrated the user-approved MAP GUIDLINES.pdf requirements into the existing rule topics. Equipment style, placement and scene metadata now have one authoritative section. The PDF takes precedence for strokes, typography, process-specific colors and finishing; existing site fidelity, north-label orbit and exact array identification phrases remain. See the shared drawing-rule index for ownership and production handoff limits.

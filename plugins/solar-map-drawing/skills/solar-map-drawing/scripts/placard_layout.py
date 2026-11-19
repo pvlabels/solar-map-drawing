@@ -108,6 +108,24 @@ def analyze_order_pdf(path,work_order,*,page_numbers=None):
             for x in group:x['needs_review']=True;x['conflicting_order_rows']=True
     return {'source_sha256':digest,'items':items,'note':'Candidate row associations require visual confirmation against the selected map/item. No map geometry or warning behavior is inferred.'}
 
+def production_style(settings=None):
+    settings=settings or {};process=settings.get('process','laser')
+    defaults={'laser':('#00a651','#ffffff','Laser'),'metal':('#000000','#ffffff','Print'),'label':('#ffffff','#ed1c24','Print')}
+    if process not in defaults:raise ValueError('production.process must be laser, metal or label')
+    ink,background,layer=defaults[process]
+    ink=settings.get('ink_color',ink);background=settings.get('background_color',background)
+    if not all(re.fullmatch(r'#[0-9a-fA-F]{6}',str(c)) for c in (ink,background)):raise ValueError('Production preview colors must be six-digit SVG colors')
+    if ink.lower()==background.lower():raise ValueError('Production ink and background need visible contrast')
+    return {'process':process,'ink':ink,'background':background,'backing':background if process=='label' else '#ffffff','layer':layer}
+
+
+def font_scale(value):
+    scale=float(value)
+    if not math.isfinite(scale) or scale<.7-1e-6 or scale>1+1e-6 or abs(scale*20-round(scale*20))>1e-5:
+        raise ValueError('Font horizontal scale must be 70%-100% in 5% increments')
+    return scale
+
+
 def wrap(lines,size,width,scale=1):
     font=fitz.Font('helv');result=[]
     if isinstance(lines,str):lines=[lines]
@@ -124,15 +142,17 @@ def wrap(lines,size,width,scale=1):
     return result
 
 def text_record(text,x,y,size,anchor='middle',scale=1,role='warning'):
+    scale=font_scale(scale)
     width=fitz.Font('helv').text_length(text,fontsize=size)*scale
     left=x-width*{'start':0,'middle':.5,'end':1}[anchor]
     return {'text':text,'x':x,'y':y,'size_pt':size,'anchor':anchor,'width_scale':scale,'role':role,
             'bbox':[left,y-size*1.075,left+width,y+size*.299]}
 
-def plan(placard,job=None,manifest=None,output_mode=None):
+def plan(placard,job=None,manifest=None,output_mode=None,production=None):
     if output_mode not in (None,'map-only','map-labeled','finished'):
         raise ValueError('Unknown solar output mode')
     job=job or {};data=assets();order=placard.get('order',{})
+    process=production_style(production)
     for key in ('sku','item_code','nominal_size_in','order_row_evidence','source_page'):
         if not order.get(key):raise ValueError('Size-first layout needs source-confirmed placard.order.'+key)
     if len(order['nominal_size_in'])!=2:raise ValueError('Order size needs width and height')
@@ -149,8 +169,8 @@ def plan(placard,job=None,manifest=None,output_mode=None):
         raise ValueError('Placard order evidence must be tied to this source PDF hash')
     name=placard.get('profile');profile=data['profiles'].get(name)
     if profile:
-        if re.search(r'(?i)metal|alumin',str(order.get('material_hint') or order.get('material') or '')):
-            raise ValueError('Measured plastic production profiles do not establish a metal sign cut size; supply approved dimensions')
+        if process['process']!='laser' or re.search(r'(?i)metal|alumin',str(order.get('material_hint') or order.get('material') or '')):
+            raise ValueError('Measured laser-plastic profiles do not establish a metal/label cut size; supply approved dimensions')
         if any(abs(a-b)>.001 for a,b in zip(nominal,profile['nominal_in'])):
             raise ValueError('Ordered size conflicts with the selected production profile; do not force a stock size')
         width,height=profile['cut_size_pt'];inset=profile['safe_inset_pt']
@@ -161,6 +181,8 @@ def plan(placard,job=None,manifest=None,output_mode=None):
             raise ValueError('Unverified custom size: supply measured production_size_pt and production_size_evidence; no universal cut reduction is assumed')
         width,height=map(positive,explicit);inset=positive(placard.get('safe_inset_pt',8));size_evidence=placard['production_size_evidence'];profile={}
     footer={**data['footer'],**placard.get('footer',{})}
+    if float(footer['size_pt'])!=5:raise ValueError('Footer must remain 5 pt at 100% horizontal scale')
+    footer['color']='#ed1c24' if process['process']=='laser' else process['ink']
     footer_top=height-positive(footer['reserve_height_pt']);safe=[inset,inset,width-inset,footer_top]
     warning=placard.get('warning',{});style_id=warning.get('style',profile.get('warning_style'))
     if style_id not in data['warning_styles']:raise ValueError('Choose a reviewed warning style')
@@ -196,7 +218,7 @@ def plan(placard,job=None,manifest=None,output_mode=None):
     if note and note.get('placement')=='bottom':bottom_notes.insert(0,note);note=None
     if note:
         if not note.get('evidence'):raise ValueError('Operational note needs source evidence')
-        size=positive(note.get('size_pt',11));scale=positive(note.get('width_scale',.81 if style_id.startswith('tfs') else 1))
+        size=positive(note.get('size_pt',11));scale=positive(note.get('width_scale',.80 if style_id.startswith('tfs') else 1))
         ny=max(bottom+size+7,(divider_y or 0)+size+4)
         for i,text in enumerate(wrap(note['text'],size,width-2*inset,scale)):
             records.append(text_record(text,width/2,ny+i*size*1.2,size,scale=scale,role='operational-note'))
@@ -244,20 +266,22 @@ def plan(placard,job=None,manifest=None,output_mode=None):
         for cx,cy,r in circles:
             if fitz.Rect(text['bbox']).intersects(fitz.Rect(cx-r-2,cy-r-2,cx+r+2,cy+r+2)):
                 raise ValueError('Mounting-hole clearance intersects warning/footer text; review the confirmed layout')
-    for color in (footer['color'],placard.get('cutline',{}).get('color',data['cutline']['color'])):
+    cutline={**data['cutline'],**placard.get('cutline',{})}
+    cutline['stroke_pt']=.001 if process['process']=='laser' else 1
+    for color in (footer['color'],cutline['color']):
         if not re.fullmatch(r'#[0-9a-fA-F]{6}',color):raise ValueError('Finishing colors must be explicit six-digit SVG colors')
     return {'profile':name,'nominal_size_in':nominal,'cut_size_pt':[width,height],'size_evidence':size_evidence,
             'warning_style':style_id,'header_zone':reserved,'header_records':records,'divider_y':divider_y,'work_zone':work,
             'bottom_note_records':bottom_records,'bottom_note_zone':[inset,map_bottom,width-inset,footer_top] if bottom_records else None,
             'work_regions':regions,'reserved_header_corner':reserved if corner!='full_width' else None,
             'footer_zone':[0,footer_top,width,height],'footer_records':footer_records,'footer_part_number':part,
-            'cutline':{**data['cutline'],**placard.get('cutline',{})},'footer_color':footer['color'],
+            'cutline':cutline,'footer_color':footer['color'],'production_style':process,
             'holes':circles,'include_chrome':output_mode=='finished' if output_mode else placard.get('include_chrome',True),
             'deferred_finishing':['Unconfirmed requested hole pattern; omitted from map output'] if unresolved_holes else []}
 
 def prepare_scene(scene,manifest):
     if not scene.get('placard'):return scene,None
-    result=copy.deepcopy(scene);p=plan(result['placard'],result.get('job'),manifest,result.get('output_mode'))
+    result=copy.deepcopy(scene);p=plan(result['placard'],result.get('job'),manifest,result.get('output_mode'),result.get('production'))
     layout=result.setdefault('layout',{})
     if layout.get('size_pt') and any(abs(a-b)>.001 for a,b in zip(layout['size_pt'],p['cut_size_pt'])):
         raise ValueError('Scene canvas differs from the ordered cutline size; map scale must be planned in the working zone')
@@ -278,6 +302,8 @@ def circle_path(cx,cy,r):
 
 def chrome_svg(p,color='#00a651'):
     if not p['include_chrome']:return ''
+    color=p.get("production_style",{}).get("ink",color)
+    cut_layer="Laser" if p.get("production_style",{}).get("process","laser")=="laser" else "Flex Cut"
     w,h=p['cut_size_pt'];cut=p['cutline'];radius=float(cut.get('corner_radius_pt',0))
     if radius<0 or radius>min(w,h)/2:raise ValueError('Invalid cutline corner radius')
     if radius and not cut.get('shape_evidence'):raise ValueError('Rounded cutline needs shape_evidence')
@@ -285,8 +311,8 @@ def chrome_svg(p,color='#00a651'):
         r=radius;k=r*.5522847498307936
         d=f'M{num(r)} 0 L{num(w-r)} 0 C{num(w-r+k)} 0 {num(w)} {num(r-k)} {num(w)} {num(r)} L{num(w)} {num(h-r)} C{num(w)} {num(h-r+k)} {num(w-r+k)} {num(h)} {num(w-r)} {num(h)} L{num(r)} {num(h)} C{num(r-k)} {num(h)} 0 {num(h-r+k)} 0 {num(h-r)} L0 {num(r)} C0 {num(r-k)} {num(r-k)} 0 {num(r)} 0 Z'
     else:d=f'M0 0 L{num(w)} 0 L{num(w)} {num(h)} L0 {num(h)} Z'
-    out=[f'<path id="cutline" data-role="cutline" d="{d}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>']
-    for i,(cx,cy,r) in enumerate(p['holes']):out.append(f'<path id="hole-{i+1}" data-role="cutline" d="{circle_path(cx,cy,r)}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>')
+    out=[f'<path id="cutline" data-role="cutline" data-production-layer="{cut_layer}" d="{d}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>']
+    for i,(cx,cy,r) in enumerate(p['holes']):out.append(f'<path id="hole-{i+1}" data-role="cutline" data-production-layer="{cut_layer}" d="{circle_path(cx,cy,r)}" fill="none" stroke="{cut["color"]}" stroke-width="{num(positive(cut["stroke_pt"]))}"/>')
     out.extend(text_svg(t,color) for t in p['header_records'])
     out.extend(text_svg(t,color) for t in p.get('bottom_note_records',[]))
     if p['divider_y'] is not None:
@@ -358,7 +384,7 @@ def main():
     args=parser.parse_args()
     if args.command=='analyze-order':result=analyze_order_pdf(args.source,args.work_order)
     else:
-        scene=json.loads(Path(args.scene).read_text(encoding='utf8'));result=plan(scene['placard'],scene.get('job'),output_mode=scene.get('output_mode'))
+        scene=json.loads(Path(args.scene).read_text(encoding='utf8'));result=plan(scene['placard'],scene.get('job'),output_mode=scene.get('output_mode'),production=scene.get('production'))
     if args.output:Path(args.output).write_text(json.dumps(result,indent=2),encoding='utf8')
     print(json.dumps(result,indent=2))
 if __name__=='__main__':main()

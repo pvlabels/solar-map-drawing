@@ -25,7 +25,7 @@ def scene():
         'roads': [{'points': [[180, 40], [180, 180]], 'outer_offset_pt': -16,
                    'source_side': 'right', 'evidence': 'Synthetic road crossing'}],
         'callouts': [
-            {'text': 'METER', 'x': 10, 'y': 104.68, 'side': 'right', 'via': [],
+            {'text': 'METER', 'x': 10, 'y': 105.07, 'size_pt': 13, 'side': 'right', 'via': [],
              'target': [270, 100], 'target_element': 'meter', 'clearance': False},
             {'text': 'DEVICE', 'x': 150, 'y': 20, 'anchor': 'middle',
              'side': 'bottom', 'via': [], 'target': [150, 210]}]}
@@ -51,7 +51,7 @@ class ArrowBackingTests(unittest.TestCase):
             backing, shaft = nodes[i:i+2]
             self.assertEqual(backing.get('stroke'), '#ffffff')
             self.assertEqual(backing.get('stroke-width'), '5')
-            self.assertEqual(shaft.get('stroke-width'), '0.75')
+            self.assertEqual(shaft.get('stroke-width'), '1')
             self.assertEqual(shaft.get('data-role'), 'leader')
             self.assertEqual(backing.get('d'), shaft.get('d'))
         self.assertEqual(report['export_cleanup']['leader_backing_strokes'], 2)

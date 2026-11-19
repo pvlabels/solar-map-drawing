@@ -48,7 +48,7 @@ class RoadLayoutTests(unittest.TestCase):
                     dashed=segments(nodes,'road-dashed',side)
                     self.assertTrue(dashed)
                     self.assertTrue(all(abs(a[0]-b[0])<1e-6 or abs(a[1]-b[1])<1e-6 for a,b in [solid,*dashed]))
-                    fixed=10.375 if side=='left' else 309.625 if side=='right' else 60.375 if side=='top' else 259.625
+                    fixed=10.5 if side=='left' else 309.5 if side=='right' else 60.5 if side=='top' else 259.5
                     axis=0 if side in ('left','right') else 1
                     self.assertTrue(all(abs(p[axis]-fixed)<1e-6 for edge in dashed for p in edge))
                     length=sum(math.dist(a,b) for a,b in [solid])
@@ -59,9 +59,9 @@ class RoadLayoutTests(unittest.TestCase):
                 for side in adjacent:
                     line=segments(nodes,'road-edge',side)[0]
                     self.assertTrue(any(math.dist(a,b)<1e-6 for a in line for b in corners))
-                self.assertTrue(all(n.get('stroke-width')=='0.75' for n in nodes if n.tag.endswith('path')))
+                self.assertTrue(all(n.get('stroke-width')=='1' for n in nodes if n.tag.endswith('path')))
 
-    def test_lane_width_and_dashes_scale_with_drawing_area(self):
+    def test_lane_width_scales_but_20_pt_dashes_remain_physical(self):
         first=rendered(('left',),(10,60,210,260))
         second=rendered(('left',),(0,0,400,400))
         def dimensions(nodes):
@@ -70,7 +70,8 @@ class RoadLayoutTests(unittest.TestCase):
             return inner-outer[0][0],math.dist(*outer)
         small=dimensions(first);large=dimensions(second)
         self.assertAlmostEqual(large[0],2*small[0])
-        self.assertAlmostEqual(large[1],2*small[1])
+        self.assertAlmostEqual(small[1],20)
+        self.assertAlmostEqual(large[1],20)
 
     def test_road_extension_does_not_change_building_fit_or_source_scene(self):
         original=scene();saved=copy.deepcopy(original)

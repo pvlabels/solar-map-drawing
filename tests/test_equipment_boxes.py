@@ -18,7 +18,7 @@ class EquipmentBoxes(unittest.TestCase):
         before=copy.deepcopy(glyphs);out,report=w.normalize_equipment(glyphs,lambda p:p)
         asset=json.loads((CORE/'assets/leader-arrow-2.json').read_text())
         ys=[p[1] for p in w.vertices(asset['commands'])]
-        expected_head_width=(max(ys)-min(ys))*.75/asset['reference_stroke_pt']
+        expected_head_width=(max(ys)-min(ys))*1.0/asset['reference_stroke_pt']
         for el in out:
             width,depth=self.size(el)
             self.assertAlmostEqual(width/depth,1.5)

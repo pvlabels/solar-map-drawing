@@ -233,7 +233,7 @@
       "body_size_pt": 38,
       "body_baseline_pt": 116.4,
       "leading_pt": 39,
-      "width_scale": 0.73,
+      "width_scale": 0.75,
       "default_heading": "CAUTION",
       "default_lines": [
         "THIS SERVICE SUPPLIED BY",
@@ -259,22 +259,22 @@
     "tfs_caution": {
       "heading_size_pt": 20,
       "heading_baseline_pt": 24.5,
-      "heading_width_scale": 0.81,
+      "heading_width_scale": 0.8,
       "body_size_pt": 13,
       "body_baseline_pt": 40.5,
       "leading_pt": 15,
-      "width_scale": 0.81,
+      "width_scale": 0.8,
       "divider": true
     },
     "partial_shutdown": {
       "heading_size_pt": 20,
       "heading_baseline_pt": 22.5,
       "heading_leading_pt": 22,
-      "heading_width_scale": 0.81,
+      "heading_width_scale": 0.8,
       "body_size_pt": 13,
       "body_gap_pt": 17.5,
       "leading_pt": 15,
-      "width_scale": 0.81,
+      "width_scale": 0.8,
       "divider": true
     },
     "directory": {

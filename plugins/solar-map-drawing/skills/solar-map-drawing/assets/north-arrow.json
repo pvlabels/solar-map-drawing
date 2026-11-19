@@ -1,44 +1,47 @@
 {
-  "description": "Canonical north needle from finished artwork, normalized north-up. Outlined left half, filled right half; even-odd transparent cutout.",
-  "height": 34.365431,
+  "name": "Illustrator Arrow 15",
+  "description": "Arrow 15 at 1 pt reference stroke, normalized north-up at tip (0,0). Expanded silhouette with an even-odd transparent left cutout; no duplicated outline stroke.",
+  "source": "Adobe Illustrator 2026/Support Files/Required/Resources/en_US/Arrowheads.ai, native symbol Arrow 15",
+  "reference_stroke_pt": 1,
+  "height": 11.45508,
   "commands": [
     [
       "M",
-      -9.978707,
-      34.365431
+      -3.32617,
+      11.45508
     ],
     [
       "L",
-      -0.0,
-      22.535032
+      0,
+      7.51172
     ],
     [
       "L",
-      9.977944,
-      34.365212
+      3.32617,
+      11.45508
     ],
     [
       "L",
-      0.0,
-      0.0
+      0,
+      0
     ],
     [
       "Z"
     ],
     [
       "M",
-      -7.087135,
-      29.496182
+      -2.3623,
+      9.83203
     ],
     [
       "L",
-      -0.000521,
-      3.781908
+      0,
+      1.2607
     ],
     [
       "L",
-      0.000115,
-      20.724989
+      0,
+      6.9082
     ],
     [
       "Z"

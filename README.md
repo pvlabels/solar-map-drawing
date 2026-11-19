@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version **3.3.5** packages three skills in the same private workspace plugin:
+Version **3.4.0** packages three skills in the same plugin:
 
 | Skill | Invocation | Output |
 | --- | --- | --- |
@@ -10,15 +10,19 @@ Version **3.3.5** packages three skills in the same private workspace plugin:
 
 All three use the shared rules, renderer and vector assets under `plugins/solar-map-drawing/skills/solar-map-drawing/`. Panels within each countable array touch edge-to-edge without overlapping interiors, unless explicitly specified otherwise. Joined grids can shrink around their fixed array centers to keep 1 pt visible clearance from walls, roof lines and equipment. Modules share one size per map at 1.25 pt; interior walls are 1 pt, exterior perimeters 2 pt, and streets are horizontal or vertical. Equipment boxes use a common 1.5:1 ratio sized from the canonical Arrow 2 head. The original skill name remains the finished version. The host must provide Python/file execution; no separate model API key is required. Source interpretation and visual review remain agent-assisted.
 
-## Changes in 3.3.5
+## Changes in 3.4.0
 
-- White backing behind leaders creates visible gaps at line crossings.
-- Equipment placement follows source wall contact; clearly separated boxes stay in place.
-- The north N orbits with the needle while remaining upright.
-- Corner-lot roads span the usable drawing area with proportional lanes and dashes.
-- Array callouts use only SOLAR ARRAY ON ROOFTOP or GROUND MOUNT SOLAR ARRAY.
+Integrated the user-approved MAP GUIDLINES.pdf into the existing rule sections, with PDF specifications taking precedence over conflicting older settings. Equipment style, placement and metadata now live in [one authoritative section](plugins/solar-map-drawing/skills/solar-map-drawing/references/drawing-rules-production.md#equipment).
 
-Run `python -m unittest discover -s tests -v` for renderer checks and `pwsh -File scripts/check-drawing-rules.ps1` for unchanged-rule preservation.
+- 1 pt Arrow 2 leaders and roads, with 20 pt dash / 24 pt gap road patterns.
+- Arial typography, 8 pt minimum callouts, 5 pt footer, and 70%-100% horizontal scaling in 5% steps.
+- Separate laser, metal and label colors, backing colors, cutline weights and layer metadata.
+- Arrow 15 north presets with upright orbiting N, outward street names, and the JK Solar street requirement.
+- Required/omitted callout guidance, source-only YOU ARE HERE markers, and exact warning punctuation.
+
+Native Illustrator layers, process swatches and 10 pt print bleed need production handoff verification; SVG metadata does not create those native features. The source PDF and its customer examples are not included in this repository.
+
+Run `python -m unittest discover -s tests -v` and `pwsh -File scripts/check-drawing-rules.ps1`.
 
 ## Workspace setup
 
@@ -27,7 +31,7 @@ Run `python -m unittest discover -s tests -v` for renderer checks and `pwsh -Fil
 3. After import, configure the plugin's workspace availability. The coworker can install it from the workspace plugin directory unless it has been installed for them.
 4. Start a new file-capable chat, attach the source PDF, and select the skill matching the desired output from the table above.
 
-The GitHub account used for the import must retain access to this private repository. Sharing the plugin within the workspace and inviting someone to this repository are separate actions.
+The GitHub account used for the import must be able to read this repository. Sharing the plugin within the workspace and inviting someone to this repository are separate actions.
 
 ## Requirements
 

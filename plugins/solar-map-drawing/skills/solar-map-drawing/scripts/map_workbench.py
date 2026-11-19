@@ -26,7 +26,7 @@ from PIL import Image, ImageDraw
 
 # Physical points in the final drawing; never multiplied by map fit scale.
 ROLES = {"building": 2.0, "roof": 1.0, "wall": 1.0, "solar": 1.25, "solar_field": 1.25, "equipment": 1.5,
-         "context": 1.0, "north": 1.5, "leader": 0.75, "feature": 1.0}
+         "context": 1.0, "north": 1.5, "leader": 1.0, "feature": 1.0}
 OUTPUT_MODES = ('map-only', 'map-labeled', 'finished')
 
 
@@ -1021,13 +1021,13 @@ def draw_elements(elements, transform, color, warnings, box, voids=(), mount_edg
 
 
 def text_box(label):
-    size=float(label.get("size_pt",12))
-    if not math.isfinite(size) or size<=0: raise ValueError("Invalid text size")
+    size=float(label.get("size_pt",13))
+    if not math.isfinite(size) or size<8: raise ValueError("Map callout text must be at least 8 pt")
     lines=label["text"] if isinstance(label["text"],list) else [label["text"]]
     if not lines or not all(isinstance(line,str) and line for line in lines): raise ValueError("Empty label")
     font=fitz.Font("helv")
     stretch=float(label.get('width_scale',1))
-    if not math.isfinite(stretch) or stretch<=0:raise ValueError('Invalid text width scale')
+    placard_tools().font_scale(stretch)
     width=max(font.text_length(line,fontsize=size) for line in lines)*stretch
     anchor=label.get("anchor","start")
     if anchor not in ("start","middle","end"): raise ValueError("Invalid label anchor")
@@ -1091,7 +1091,7 @@ def arrow_setback(target, ux, uy, gap, depth, half_width, obstacles):
     raise ValueError('Arrowhead has no clear approach; choose another route')
 
 
-def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipment_targets=None, voids=(), array_targets=None):
+def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipment_targets=None, voids=(), array_targets=None, backing_color="#ffffff"):
     leaders,texts,boxes,targets=[],[],[],[]
     head_envelopes=[];shaft_routes=[]
     arrow=read_json(Path(__file__).resolve().parents[1]/"assets/leader-arrow-2.json")
@@ -1101,7 +1101,15 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
     head_depth=-min(x for x, _ in head_points)*arrow_scale
     head_half_width=max(abs(y) for _, y in head_points)*arrow_scale
     for index,label in enumerate(labels):
+        label=dict(label)
         lines,size,anchor,bbox=text_box(label)
+        if "target" in label:
+            target=transform(label["target"])
+            side=label.get("side","right" if target[0]>(bbox[0]+bbox[2])/2 else "left")
+            desired="end" if side=="right" else "start" if side=="left" else ("end" if anchor=="end" else "start")
+            label["anchor"]=desired
+            label["x"]=bbox[2] if desired=="end" else bbox[0]
+            lines,size,anchor,bbox=text_box(label)
         if not box.contains(fitz.Rect(bbox)): warnings.append(f"Callout {index+1} is outside canvas")
         for other in boxes:
             if intersects(bbox,other): warnings.append(f"Callout {index+1} overlaps another label")
@@ -1196,7 +1204,7 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
             d=path_d(clear_commands(shaft_commands,voids,ROLES['leader']/2))
             # Keep the crossed artwork intact. Each white/colored pair is
             # painted together so later leaders also bridge earlier leaders.
-            leaders.append(f'<path data-role="leader-underlay" d="{d}" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="butt" stroke-linejoin="round"/>')
+            leaders.append(f'<path data-role="leader-underlay" d="{d}" fill="none" stroke="{backing_color}" stroke-width="5" stroke-linecap="butt" stroke-linejoin="round"/>')
             leaders.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{n(ROLES["leader"])}" stroke-linecap="butt"/>')
             def head_transform(p):
                 return (tip[0]+arrow_scale*(p[0]*ux-p[1]*uy),
@@ -1206,7 +1214,7 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
             leaders.append(f'<path data-arrowhead="Illustrator Arrow 2" d="{path_d(head)}" fill="{color}"/>')
             targets.append({"text":lines,"source_target":label["target"],"output_target":target,"arrow_tip":tip,"setback_pt":gap,
                             "shaft_route":route,"text_bbox":bbox,"attachment_side":side,
-                            "target_element":label.get('target_element'),'clearance':True,'backing_width_pt':5,
+                            "target_element":label.get('target_element'),'clearance':True,'backing_width_pt':5,'backing_color':backing_color,
                             'head_envelope':envelope,'visible_straight_shaft_pt':length-gap-head_depth})
         for i,line in enumerate(lines):
             stretch=float(label.get('width_scale',1))
@@ -1238,18 +1246,22 @@ def north_direction(north, applied_rotation):
 def draw_north(north, applied_rotation, color):
     if north is None: return "",None
     asset=read_json(Path(__file__).resolve().parents[1]/"assets/north-arrow.json")
-    height=float(north.get("height_pt",34))
-    if not math.isfinite(height) or height<=0: raise ValueError("Invalid north symbol height")
-    scale=height/asset["height"]
+    legacy_height=float(north.get("height_pt",34))
+    if not math.isfinite(legacy_height) or legacy_height<=0: raise ValueError("Invalid north symbol height")
+    stroke=float(north.get("stroke_pt",2 if legacy_height<28 else 3))
+    if stroke not in (2,3): raise ValueError("North Arrow 15 requires a 2 pt or 3 pt reference stroke")
+    scale=stroke/asset["reference_stroke_pt"]
+    height=asset["height"]*scale
     angle=north_direction(north,applied_rotation)["display_deg"]
     rad=math.radians(angle); c,s=math.cos(rad),math.sin(rad)
     x,y=north["x"],north["y"]
     def transform(p): return (x+scale*(p[0]*c-p[1]*s),y+scale*(p[0]*s+p[1]*c))
     commands=transform_commands(asset["commands"],transform)
-    needle=f'<path d="{path_d(commands)}" fill="{color}" fill-rule="evenodd"/>'
+    needle=f'<path data-arrowhead="Illustrator Arrow 15" data-reference-stroke-pt="{n(stroke)}" d="{path_d(commands)}" fill="{color}" fill-rule="evenodd"/>'
     # Orbit the glyph center with the needle, but keep the letter upright.
     # Preserve the existing north-up baseline and spacing at every bearing.
-    size=height*.52
+    size=float(north.get("label_size_pt",18 if stroke==2 else 25))
+    if size not in (18,25): raise ValueError("North N must be 18 pt or 25 pt")
     cap_height=fitz.Font("helv").glyph_bbox(ord("N")).height*size
     orbit=height+size+4-cap_height/2
     label_x=x-orbit*s
@@ -1266,7 +1278,8 @@ def scene_artwork(scene, manifest):
     if any(el["role"]=="north" for el in elements):
         raise ValueError("Use north_arrow with source_rotation_deg; do not reuse customer compass artwork")
     box,transform,alignment=layout_for(scene,manifest,elements)
-    color=html.escape(scene.get("color","#00a651"),quote=True)
+    style=placard_tools().production_style(scene.get("production"))
+    color=style["ink"]
     production,clearances=production_elements(elements,transform,scene.get('production'))
     production,equipment=normalize_equipment(production,transform)
     voids=[vertices(path)[:-1] if path[-1][0]!='Z' and path[-1][-2:]==path[0][1:] else vertices(path)
@@ -1286,7 +1299,7 @@ def scene_artwork(scene, manifest):
     callout_svg,targets=draw_callouts(callouts,transform,color,box,warnings,obstacles,
                                     {item['id']:item['output_center'] for item in equipment},voids,
                                     {e['id']:[(poly,ROLES[e['role']]/2) for poly in closed_polygons(e['paths'],e['id'])]
-                                     for e in production if e['role'] in ('solar','solar_field') and any(c.get('array_element')==e['id'] for c in callouts)})
+                                     for e in production if e['role'] in ('solar','solar_field') and any(c.get('array_element')==e['id'] for c in callouts)},style['backing'])
     # Only equipment interiors trim source strokes. Leader crossing gaps use
     # editable white backing, preserving the source roof/perimeter geometry.
     body=[draw_elements([e for e in production if e['role']!='equipment'],lambda p:p,color,warnings,box,
@@ -1300,9 +1313,9 @@ def scene_artwork(scene, manifest):
     body.append(callout_svg)
     # Plain labels without leaders use final output point coordinates.
     for label in scene.get("labels", []):
-        size = float(label.get("size_pt", 12))
-        if size <= 0 or not label.get("text"):
-            raise ValueError("Label needs positive size and nonempty text")
+        size = float(label.get("size_pt", 13))
+        if not math.isfinite(size) or size < 8 or not label.get("text"):
+            raise ValueError("Map labels need nonempty text and at least 8 pt size")
         lines = label["text"] if isinstance(label["text"], list) else [label["text"]]
         anchor = label.get("anchor", "middle")
         if anchor not in ("start", "middle", "end"):
@@ -1330,7 +1343,11 @@ def scene_artwork(scene, manifest):
               "checks": ["building count, outline topology, relative placement", "roof junctions and open/closed edges",
                          "panel count, layout, rotation, roof clearance", "equipment position and north direction",
                          "labels, omitted details, crop boundaries"]}
-    return "".join(body), box, report
+    if style["process"]=="label":
+        body.insert(0,f'<path data-role="background" d="M{n(box.x0)} {n(box.y0)} L{n(box.x1)} {n(box.y0)} L{n(box.x1)} {n(box.y1)} L{n(box.x0)} {n(box.y1)} Z" fill="{style["background"]}"/>')
+    report["production_style"]=style
+    report["production_handoff"]="Verify native Illustrator layers/swatches and any print-template bleed before production"
+    return f'<g data-production-process="{style["process"]}" data-production-layer="{style["layer"]}" data-production-ink="{color}">'+"".join(body)+"</g>", box, report
 
 
 def cardinal_road_points(points):
@@ -1355,20 +1372,24 @@ def draw_road(road,transform,color):
     if not math.isfinite(offset) or abs(offset)<10:raise ValueError('Road lane needs a reviewed offset of at least 10 pt')
     normal=(-(b[1]-a[1])/length,(b[0]-a[0])/length)
     c=tuple(a[j]+normal[j]*offset for j in (0,1));d=tuple(b[j]+normal[j]*offset for j in (0,1))
-    return road_edge_artwork(road,a,b,c,d,color,road.get('dash_pt',[18,18]))
+    return road_edge_artwork(road,a,b,c,d,color,road.get('dash_pt',[20,24]))
 
 
 def road_edge_artwork(road,a,b,c,d,color,dash,label_center=None):
     """Editable solid/dashed edges and parallel lettering for one street."""
-    paths=[f'<path data-role="road-edge" d="M{n(a[0])} {n(a[1])} L{n(b[0])} {n(b[1])}" fill="none" stroke="{color}" stroke-width="0.75"/>']
+    paths=[f'<path data-role="road-edge" d="M{n(a[0])} {n(a[1])} L{n(b[0])} {n(b[1])}" fill="none" stroke="{color}" stroke-width="1"/>']
     dashed=dash_commands([['M',*c],['L',*d]],dash,0)
-    paths.append(f'<path data-role="road-dashed" d="{path_d(dashed)}" fill="none" stroke="{color}" stroke-width="0.75"/>')
+    paths.append(f'<path data-role="road-dashed" d="{path_d(dashed)}" fill="none" stroke="{color}" stroke-width="1"/>')
     label=road.get('label')
     if label:
-        angle=math.atan2(b[1]-a[1],b[0]-a[0])
-        if angle>math.pi/2:angle-=math.pi
-        if angle<=-math.pi/2:angle+=math.pi
-        size=float(label.get('size_pt',8));co,si=math.cos(angle),math.sin(angle)
+        side=road.get("layout_side")
+        if side not in ("left","right","top","bottom"):
+            # The dashed outer edge identifies the outward side for legacy roads.
+            side=("left" if c[0]<a[0] else "right") if abs(a[0]-b[0])<1e-6 else ("top" if c[1]<a[1] else "bottom")
+        angle={"left":-math.pi/2,"right":math.pi/2,"top":0,"bottom":0}[side]
+        size=float(label.get('size_pt',8))
+        if not math.isfinite(size) or size<8:raise ValueError('Street names must be at least 8 pt')
+        co,si=math.cos(angle),math.sin(angle)
         # Keep lettering centered in the normalized street lane, parallel to its
         # cardinal direction. Old source-angle label coordinates are not reused.
         mid=label_center or tuple((a[j]+b[j]+c[j]+d[j])/4 for j in (0,1))
@@ -1389,13 +1410,10 @@ def draw_roads(roads,transform,color,layout=None,canvas=None):
     if area.width<=0 or area.height<=0 or (canvas is not None and not canvas.contains(area)):
         raise ValueError('Road drawing_area must fit inside the output canvas')
     ratio=float(layout.get('lane_width_ratio',.065))
-    dash_ratios=layout.get('dash_ratios',[.075,.09])
     if not math.isfinite(ratio) or ratio<=0:
         raise ValueError('Road lane_width_ratio must be positive')
-    if len(dash_ratios)!=2 or not all(math.isfinite(float(v)) and float(v)>0 for v in dash_ratios):
-        raise ValueError('Road dash_ratios needs positive dash and gap ratios')
     # Keep the full stroke envelope within the declared drawing area.
-    half=.75/2
+    half=1/2
     left,top,right,bottom=area.x0+half,area.y0+half,area.x1-half,area.y1-half
     span=min(area.width,area.height)
     lane=max(10,span*ratio)
@@ -1420,13 +1438,13 @@ def draw_roads(roads,transform,color,layout=None,canvas=None):
         'right':((inner_right,inner_top),(inner_right,inner_bottom),(right,top),(right,bottom)),
         'top':((inner_left,inner_top),(inner_right,inner_top),(left,top),(right,top)),
         'bottom':((inner_left,inner_bottom),(inner_right,inner_bottom),(left,bottom),(right,bottom))}
-    dash=[span*float(v) for v in dash_ratios]
+    dash=[20,24]
     result=[]
     for side,road in sides.items():
         a,b,c,d=paths[side]
         if road.get('label'):
             label=road['label'];size=float(label.get('size_pt',8))
-            if not math.isfinite(size) or size<=0 or size+2>lane:
+            if not math.isfinite(size) or size<8 or size+2>lane:
                 raise ValueError('Street name needs readable type and enough lane width')
             if fitz.get_text_length(label['text'],fontsize=size)>math.dist(a,b)-4:
                 raise ValueError('Street name exceeds its lane length; review the road layout')
@@ -1507,8 +1525,17 @@ def clean_export(svg):
             else:
                 attrs['x']=n(float(attrs.get('x',0))+(dx+text_tx)/text_scale); attrs['y']=n(float(attrs.get('y',0))+dy+text_ty)
                 if text_scale!=1:attrs['transform']=f'matrix({n(text_scale)} 0 0 1 0 0)'
-            if float(attrs.get('font-size',12))<10:
+            scale=math.hypot(text_matrix[0],text_matrix[1]) if text_matrix else text_scale
+            placard_tools().font_scale(scale)
+            size=float(attrs.get('font-size',13))
+            if attrs.get('data-role') in ('footer','footer-part'):
+                if abs(size-5)>1e-6 or abs(scale-1)>1e-6:raise ValueError('Footer must be 5 pt at 100% horizontal scale')
+            elif size<8:raise ValueError('Map and warning text must be at least 8 pt')
+            process=attrs.get('data-production-process','laser')
+            if process=='laser' and size<=10:
                 attrs['fill']='#ed1c24';attrs['data-engraving']='small'
+            elif attrs.get('data-production-ink'):
+                attrs['fill']=attrs['data-production-ink']
         name=attrs.get('id') or attrs.get('data-element') or tag
         names[name]=names.get(name,0)+1
         attrs['id']=name if names[name]==1 else f'{name}-{names[name]}'
