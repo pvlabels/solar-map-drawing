@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version 3.4.1. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
+Version 3.4.2. Shared plugin for PDF attachments and editable, physically sized solar map placard SVG downloads.
 
 ## Three skills in one plugin
 
@@ -27,6 +27,8 @@ Physical strokes, typography and process-specific colors follow [Production draw
 Panels within each countable array share exact edges without overlapping interiors. The renderer compacts and, if necessary, shrinks joined grids about fixed array centers while retaining counts, bearings and missing cells. It checks 1 pt visible clearance to exterior/interior walls, roof lines and normalized equipment rectangles. Individual panel centers may shift within their own array. Explicit array IDs/cells disambiguate source groups; requested panel spacing needs recorded evidence. Shared borders export once at 1.25 pt. Schematic source fields remain schematic. Run `python -m unittest discover -s tests -v` from the repository root for the panel-fitting checks.
 
 ## Callout and road review corrections
+
+Equipment routing removes unnecessary detours and asks for a nearby label position when a route would cross the house. Equipment arrows remain continuous editable strokes with attached SVG Arrow 2 markers and separate crossing-gap backing. The canonical marker definition is the only export `defs` exception. PNG review resolves markers in a temporary copy; verify native Illustrator Stroke-panel attachment after import.
 
 Use the shared [Callouts rules](skills/solar-map-drawing/references/drawing-rules-callouts.md) for Arrow 2, routing and process-colored crossing gaps, and [Roads](skills/solar-map-drawing/references/drawing-rules-roads.md) for full-area corner roads and outward street names. See [Equipment](skills/solar-map-drawing/references/drawing-rules-production.md#equipment) for the single source of device styling, placement and metadata.
 

@@ -161,6 +161,9 @@ def svg_wrap(body, box, width=1200, physical=False):
 
 
 def svg_png(svg, output, width=1600, alpha=False):
+    # MuPDF does not paint SVG markers. Expand a temporary review copy only;
+    # the delivered SVG retains the live marker attached to its stroke.
+    svg=placard_tools().expand_equipment_markers(svg)
     with fitz.open(stream=svg.encode(), filetype="svg") as doc:
         page = doc[0]
         page.get_pixmap(matrix=fitz.Matrix(width/page.rect.width, width/page.rect.width), alpha=alpha).save(output)
@@ -1090,7 +1093,60 @@ def arrow_setback(target, ux, uy, gap, depth, half_width, obstacles):
     raise ValueError('Arrowhead has no clear approach; choose another route')
 
 
-def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipment_targets=None, voids=(), array_targets=None, backing_color="#ffffff"):
+def footprint_contains(point, polygon):
+    """Ray crossing, including concave/stepped house footprints."""
+    x,y=point; inside=False
+    for a,b in zip(polygon,polygon[1:]+polygon[:1]):
+        if (a[1]>y)!=(b[1]>y) and x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0]: inside=not inside
+    return inside
+
+
+def segment_inside_length(a,b,polygon):
+    cuts=[0.,1.]; direction=(b[0]-a[0],b[1]-a[1])
+    for c,d in zip(polygon,polygon[1:]+polygon[:1]):
+        edge=(d[0]-c[0],d[1]-c[1]); den=cross(direction,edge)
+        if abs(den)<1e-9: continue
+        offset=(c[0]-a[0],c[1]-a[1]); t,u=cross(offset,edge)/den,cross(offset,direction)/den
+        if 0<t<1 and 0<=u<=1: cuts.append(t)
+    cuts=sorted(set(cuts))
+    return math.dist(a,b)*sum(hi-lo for lo,hi in zip(cuts,cuts[1:])
+        if footprint_contains(tuple(a[j]+(lo+hi)/2*direction[j] for j in (0,1)),polygon))
+
+
+def equipment_route_clear(route, target, context, voids, text_boxes):
+    """Keep routing outside the house; allow only a local final entry."""
+    segments=list(zip(route,route[1:]))
+    for i,(a,b) in enumerate(segments):
+        if i:
+            u=(a[0]-segments[i-1][0][0],a[1]-segments[i-1][0][1]);v=(b[0]-a[0],b[1]-a[1])
+            if abs(cross(u,v))<1e-7 and sum(u[j]*v[j] for j in (0,1))<0:return False
+        if any(segments_distance(a,b,c,d)<1e-6 for c,d in segments[:max(0,i-1)]):return False
+    for poly in voids:
+        if any(polygon_segment_distance(poly,a,b)<2.5-1e-6 for a,b in segments): return False
+    for bbox in text_boxes:
+        poly=[(bbox[0],bbox[1]),(bbox[2],bbox[1]),(bbox[2],bbox[3]),(bbox[0],bbox[3])]
+        if any(polygon_segment_distance(poly,a,b)<2.5-1e-6 for a,b in segments): return False
+    walls,footprints=context or ([],[])
+    for index,(a,b) in enumerate(segments):
+        crossings=[]
+        for c,d in walls:
+            u=(b[0]-a[0],b[1]-a[1]);v=(d[0]-c[0],d[1]-c[1]);den=cross(u,v)
+            if abs(den)<1e-9:
+                if line_overlap(a,b,c,d): return False
+                continue
+            ac=(c[0]-a[0],c[1]-a[1]);t,s=cross(ac,v)/den,cross(ac,u)/den
+            if -1e-7<=t<=1+1e-7 and -1e-7<=s<=1+1e-7: crossings.append(round(t,6))
+        if crossings and (index!=len(segments)-1 or len(set(crossings))>1): return False
+        for poly in footprints:
+            travel=segment_inside_length(a,b,poly)
+            if travel<1e-5: continue
+            if index!=len(segments)-1 or not footprint_contains(target,poly): return False
+            local_depth=min(point_segment_distance(target,c,d) for c,d in zip(poly,poly[1:]+poly[:1]))
+            if travel>local_depth+1e-5: return False
+    return True
+
+
+def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipment_targets=None, voids=(), array_targets=None, backing_color="#ffffff", routing_context=None):
     leaders,texts,boxes,targets=[],[],[],[]
     head_envelopes=[];shaft_routes=[]
     arrow=read_json(Path(__file__).resolve().parents[1]/"assets/leader-arrow-2.json")
@@ -1099,6 +1155,9 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
     head_points=vertices(arrow["commands"])
     head_depth=-min(x for x, _ in head_points)*arrow_scale
     head_half_width=max(abs(y) for _, y in head_points)*arrow_scale
+    marker_id='equipment-arrow-2-'+re.sub(r'[^a-zA-Z0-9_-]','',color)
+    marker_used=False
+    label_boxes=[text_box(label)[3] for label in labels]
     for index,label in enumerate(labels):
         label=dict(label)
         lines,size,anchor,bbox=text_box(label)
@@ -1157,6 +1216,19 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
                 tail=(start[0]+direction*6,start[1])
                 middle=(start[1]+target[1])/2
                 candidates.append([start,tail,(tail[0],middle),(target[0],middle),target])
+            if label.get('target_element'):
+                # Old via points are hints, not a reason to retain a detour.
+                # Try zero/one bends first, then only necessary extra bends.
+                if side in ('left','right'):
+                    for x in ((start[0]+target[0])/2,start[0]+(-6 if side=='left' else 6)):
+                        if (x-start[0])*(-1 if side=='left' else 1)>=6-1e-6:
+                            candidates.append(square_route(start,[(x,start[1]),(x,target[1])],target,side))
+                else:
+                    for y in ((start[1]+target[1])/2,start[1]+(-6 if side=='top' else 6)):
+                        if (y-start[1])*(-1 if side=='top' else 1)>=6-1e-6:
+                            candidates.append(square_route(start,[(start[0],y),(target[0],y)],target,side))
+                unique={tuple(map(tuple,route)):route for route in candidates}
+                candidates=sorted(unique.values(),key=lambda route:(len(route),sum(math.dist(a,b) for a,b in zip(route,route[1:]))))
             valid=False
             for route in candidates:
                 if len(route)<2: continue
@@ -1185,6 +1257,7 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
                               (tip[0]-head_depth*ux-head_half_width*uy,tip[1]-head_depth*uy+head_half_width*ux),
                               (tip[0]-head_depth*ux+head_half_width*uy,tip[1]-head_depth*uy-head_half_width*ux)]
                     proposed=[*route[:-1],(tip[0]-shaft_inset*ux,tip[1]-shaft_inset*uy)]
+                    if label.get('target_element') and not equipment_route_clear(proposed,target,routing_context,voids,label_boxes):continue
                     if any(polygon_distance(envelope,other)<2-1e-6 for other in head_envelopes):continue
                     if any(polygon_segment_distance(envelope,a,b)<max(2+ROLES['leader']/2,2.5)-1e-6
                            for prior in shaft_routes for a,b in zip(prior,prior[1:])):continue
@@ -1193,6 +1266,8 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
                     valid=True;break
                 if valid:break
             if not valid:
+                if label.get('target_element'):
+                    raise ValueError(f'Move the equipment label {" ".join(lines)} closer to its device/on the same side of the house, then reroute: use only necessary bends, a continuous stroke, 6 pt of straight shaft behind the head and 2 pt head clearance')
                 raise ValueError(f'Extend the final leader segment or reroute {" ".join(lines)}: leave 6 pt of straight shaft behind the head, 2 pt between heads and other leaders, and no short jogs')
             tip=(target[0]-gap*ux,target[1]-gap*uy)
             route[-1]=tip
@@ -1200,17 +1275,19 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
             # a blunt nib protrude past the pointed Arrow 2 silhouette.
             route[-1]=(tip[0]-shaft_inset*ux,tip[1]-shaft_inset*uy)
             shaft_commands=[["M",*route[0]],*[["L",*p] for p in route[1:]]]
-            d=path_d(clear_commands(shaft_commands,voids,ROLES['leader']/2))
+            d=path_d(shaft_commands if label.get('target_element') else clear_commands(shaft_commands,voids,ROLES['leader']/2))
             # Keep the crossed artwork intact. Each white/colored pair is
             # painted together so later leaders also bridge earlier leaders.
             leaders.append(f'<path data-role="leader-underlay" d="{d}" fill="none" stroke="{backing_color}" stroke-width="5" stroke-linecap="butt" stroke-linejoin="round"/>')
-            leaders.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{n(ROLES["leader"])}" stroke-linecap="butt"/>')
+            attached=f' marker-end="url(#{marker_id})" data-equipment-leader="true"' if label.get('target_element') else ''
+            leaders.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{n(ROLES["leader"])}" stroke-linecap="butt"{attached}/>')
             def head_transform(p):
                 return (tip[0]+arrow_scale*(p[0]*ux-p[1]*uy),
                         tip[1]+arrow_scale*(p[0]*uy+p[1]*ux))
             head=transform_commands(arrow["commands"],head_transform)
             head_envelopes.append(envelope);shaft_routes.append(list(route))
-            leaders.append(f'<path data-arrowhead="Illustrator Arrow 2" d="{path_d(head)}" fill="{color}"/>')
+            if label.get('target_element'):marker_used=True
+            else:leaders.append(f'<path data-arrowhead="Illustrator Arrow 2" d="{path_d(head)}" fill="{color}"/>')
             targets.append({"text":lines,"source_target":label["target"],"output_target":target,"arrow_tip":tip,"setback_pt":gap,
                             "shaft_route":route,"text_bbox":bbox,"attachment_side":side,
                             "target_element":label.get('target_element'),'clearance':True,'backing_width_pt':5,'backing_color':backing_color,
@@ -1218,7 +1295,13 @@ def draw_callouts(labels, transform, color, box, warnings, obstacles=(), equipme
         records=[placard_tools().text_record(line,label["x"],label["y"]+i*size*1.2,size,
                   anchor,float(label.get('width_scale',1)),role='callout-text') for i,line in enumerate(lines)]
         texts.append(placard_tools().text_svg(records,color))
-    return '<g id="callout-leaders">'+"".join(leaders)+'</g><g id="callout-text">'+"".join(texts)+'</g>', targets
+    marker=''
+    if marker_used:
+        marker=('<defs><marker id="'+marker_id+'" data-arrowhead="Illustrator Arrow 2" '
+                'markerUnits="userSpaceOnUse" orient="auto" refX="'+n(-shaft_inset)+'" refY="0" '
+                'viewBox="-12 -6 14 12" markerWidth="14" markerHeight="12" overflow="visible">'
+                '<path d="'+path_d(transform_commands(arrow['commands'],lambda p:(p[0]*arrow_scale,p[1]*arrow_scale)))+'" fill="'+color+'"/></marker></defs>')
+    return marker+'<g id="callout-leaders">'+"".join(leaders)+'</g><g id="callout-text">'+"".join(texts)+'</g>', targets
 
 
 def north_direction(north, applied_rotation):
@@ -1294,10 +1377,18 @@ def scene_artwork(scene, manifest):
             if len(matches)==1: label['target_element']=matches[0]
             elif len(matches)>1: raise ValueError('Ambiguous equipment callout; supply target_element explicitly')
     obstacles=arrow_obstacles(production,lambda p:p) if callouts else ()
+    routing_walls=[];routing_footprints=[]
+    for element in production:
+        if element['role'] not in ('building','wall'):continue
+        routing_walls.extend(clearance_edges(element['paths']))
+        if element['role']=='building':
+            for path in element['paths']:
+                try:routing_footprints.extend(closed_polygons([path],element['id']))
+                except ValueError:pass  # Open/cropped outlines still provide wall crossings.
     callout_svg,targets=draw_callouts(callouts,transform,color,box,warnings,obstacles,
                                     {item['id']:item['output_center'] for item in equipment},voids,
                                     {e['id']:[(poly,ROLES[e['role']]/2) for poly in closed_polygons(e['paths'],e['id'])]
-                                     for e in production if e['role'] in ('solar','solar_field') and any(c.get('array_element')==e['id'] for c in callouts)},style['backing'])
+                                     for e in production if e['role'] in ('solar','solar_field') and any(c.get('array_element')==e['id'] for c in callouts)},style['backing'],(routing_walls,routing_footprints))
     # Only equipment interiors trim source strokes. Leader crossing gaps use
     # editable white backing, preserving the source roof/perimeter geometry.
     body=[draw_elements([e for e in production if e['role']!='equipment'],lambda p:p,color,warnings,box,
@@ -1478,13 +1569,24 @@ def clean_export(svg):
     """Bake translations, flatten objects and remove coincident stroked edges."""
     ns='{http://www.w3.org/2000/svg}'
     ET.register_namespace('',ns[1:-1])
-    root=ET.fromstring(svg); leaves=[]; names={}; hidden=0
+    root=ET.fromstring(svg); leaves=[]; names={}; hidden=0;markers={}
     def walk(node,dx=0,dy=0,metadata=None):
         nonlocal hidden
         tag=node.tag.split('}')[-1]; metadata=dict(metadata or {})
         for key,value in node.attrib.items():
             if key.startswith('data-'): metadata[key]=value
-        if tag in ('defs','clipPath','mask','title','desc','metadata'): return
+        if tag=='defs':
+            for child in node:
+                if child.tag.split('}')[-1]!='marker':continue
+                if child.get('data-arrowhead')!='Illustrator Arrow 2' or len(child)!=1 or child[0].tag.split('}')[-1]!='path':
+                    raise ValueError('Only the canonical attached equipment Arrow 2 marker may be exported')
+                identity=child.get('id')
+                if not identity:raise ValueError('Equipment arrow marker requires an ID')
+                if identity in markers and ET.tostring(markers[identity])!=ET.tostring(child):
+                    raise ValueError('Conflicting equipment arrow marker IDs')
+                markers[identity]=child
+            return
+        if tag in ('clipPath','mask','title','desc','metadata'): return
         if tag=='g':
             identity=node.get('id','')
             if identity: metadata['data-element']=identity
@@ -1639,6 +1741,17 @@ def clean_export(svg):
             raise ValueError('Coincident stroke on a filled source shape needs explicit scene separation')
         leaves[owner].set('d',path_d(commands))
     output=ET.Element(root.tag,root.attrib); filled=set()
+    used_markers=set()
+    for leaf in leaves:
+        if leaf.get('marker-end'):
+            match=re.fullmatch(r'url\(#([^\)]+)\)',leaf.get('marker-end'))
+            if not match or match[1] not in markers:raise ValueError('Equipment arrow has no attached marker definition')
+            if sum(c[0]=='M' for c in parse_export_path(leaf.get('d')))!=1:
+                raise ValueError('Equipment arrow must remain one continuous stroked path')
+            used_markers.add(match[1])
+    if used_markers:
+        definitions=ET.SubElement(output,ns+'defs')
+        for identity in sorted(used_markers):definitions.append(markers[identity])
     for leaf in leaves:
         if leaf.tag==ns+'path':
             if not leaf.get('d'): continue
@@ -1661,6 +1774,7 @@ def clean_export(svg):
     return ET.tostring(output,encoding='unicode'),{'groups':0,'clipping_paths':0,'hidden_paths_removed':hidden,
              'overlap_segments_removed':removed,'overlap_length_removed_pt':length_removed,
              'permitted_equipment_wall_edges':allowed,
+             'attached_equipment_arrows':sum(leaf.get('data-equipment-leader')=='true' for leaf in output),
              'leader_backing_strokes':sum(leaf.get('data-role')=='leader-underlay' for leaf in output)}
 
 

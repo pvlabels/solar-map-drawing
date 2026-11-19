@@ -348,6 +348,48 @@ def chrome_svg(p,color='#00a651'):
     out.append(text_blocks_svg(p['footer_records'],p['footer_color']))
     return ''.join(out)
 
+def expand_equipment_markers(svg):
+    """Resolve canonical markers for bounds/PNG review only, never delivery.
+
+    MuPDF ignores SVG markers. Keep one shared interpretation for previews and
+    zone validation so the attached head is measured as well as the shaft.
+    """
+    root=ET.fromstring(svg)
+    markers={node.get('id'):node for node in root.iter() if node.tag.split('}')[-1]=='marker'}
+    def walk(parent):
+        for node in list(parent):
+            if node.tag.split('}')[-1]=='defs':continue
+            reference=node.get('marker-end')
+            if reference:
+                match=re.fullmatch(r'url\(#([^\)]+)\)',reference)
+                marker=markers.get(match[1]) if match else None
+                if marker is None or marker.get('data-arrowhead')!='Illustrator Arrow 2':
+                    raise ValueError('Missing or unsupported equipment arrow marker')
+                if marker.get('orient')!='auto' or marker.get('markerUnits')!='userSpaceOnUse':
+                    raise ValueError('Equipment markers must use the canonical physical orientation and scale')
+                coords=re.findall(r'[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?',node.get('d',''))
+                pts=list(zip(map(float,coords[::2]),map(float,coords[1::2])))
+                if len(pts)<2:raise ValueError('Equipment marker requires a shaft')
+                a,b=pts[-2:];length=math.dist(a,b)
+                if length<1e-7:raise ValueError('Equipment marker requires a nonzero terminal segment')
+                ux,uy=(b[0]-a[0])/length,(b[1]-a[1])/length
+                rx,ry=float(marker.get('refX',0)),float(marker.get('refY',0))
+                tokens=re.findall(r'[MLZ]|[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?',marker[0].get('d',''))
+                commands=[];i=0
+                while i<len(tokens):
+                    command=tokens[i];i+=1
+                    if command=='Z':commands.append('Z');continue
+                    x,y=float(tokens[i])-rx,float(tokens[i+1])-ry;i+=2
+                    commands.append(f'{command}{num(b[0]+x*ux-y*uy)} {num(b[1]+x*uy+y*ux)}')
+                head=ET.Element(node.tag,{'d':' '.join(commands),'fill':marker[0].get('fill','black')})
+                if node.get('transform'):head.set('transform',node.get('transform'))
+                parent.insert(list(parent).index(node)+1,head)
+                del node.attrib['marker-end']
+            walk(node)
+    walk(root)
+    return ET.tostring(root,encoding='unicode')
+
+
 def validate_map_svg(body,box,p):
     """Reject artwork crossing reserved zones; never mask it or enlarge the plate."""
     bounds=[]
@@ -386,7 +428,7 @@ def validate_map_svg(body,box,p):
                 l,t,rr,b=r['bbox'];a,bb,c,d,e,f=matrix
                 pts=[(a*xx+c*yy+e+dx,bb*xx+d*yy+f+dy) for xx,yy in ((l,t),(rr,t),(rr,b),(l,b))]
                 bounds.append((fitz.Rect(min(xx for xx,yy in pts),min(yy for xx,yy in pts),max(xx for xx,yy in pts),max(yy for xx,yy in pts)),'text',None,0))
-    walk(ET.fromstring('<svg>'+body+'</svg>'))
+    walk(ET.fromstring(expand_equipment_markers('<svg>'+body+'</svg>')))
     work=fitz.Rect(p['work_zone']);corner=fitz.Rect(p['reserved_header_corner']) if p['reserved_header_corner'] else None
     issues=[]
     def segment_hits(points,rect,pad=0):

@@ -30,7 +30,7 @@ class PdfGuidelinesTests(unittest.TestCase):
             normal={'laser':'#00a651','metal':'#000000','label':'#ffffff'}[process]
             self.assertEqual(texts['TEN POINT'].get('fill'),'#ed1c24' if process=='laser' else normal)
             self.assertEqual(texts['ELEVEN POINT'].get('fill'),normal)
-            self.assertTrue(all(n.get('data-production-process')==process for n in nodes))
+            self.assertTrue(all(n.get('data-production-process')==process for n in nodes if not n.tag.endswith('defs')))
 
     def test_print_label_crossing_uses_red_and_retains_white_foreground(self):
         svg,nodes,report=render('label');img=raster(svg)

@@ -37,6 +37,7 @@ def render(source=None):
 
 
 def raster(svg):
+    svg=w.placard_tools().expand_equipment_markers(svg)
     with w.fitz.open(stream=svg.encode(), filetype='svg') as doc:
         pix = doc[0].get_pixmap(matrix=w.fitz.Matrix(4, 4), alpha=False)
     return w.Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
@@ -55,8 +56,8 @@ class ArrowBackingTests(unittest.TestCase):
             self.assertEqual(shaft.get('data-role'), 'leader')
             self.assertEqual(backing.get('d'), shaft.get('d'))
         self.assertEqual(report['export_cleanup']['leader_backing_strokes'], 2)
-        self.assertEqual(sum(n.get('data-arrowhead') is not None for n in nodes), 2)
-        self.assertTrue(all(n.tag.split('}')[-1] in ('path', 'text') for n in nodes))
+        self.assertEqual(sum(n.get('data-arrowhead') is not None for n in ET.fromstring(render()[0]).iter()), 2)
+        self.assertTrue(all(n.tag.split('}')[-1] in ('path', 'text', 'defs') for n in nodes))
 
     def test_legacy_clearance_false_cannot_disable_required_backing(self):
         _, report, _ = render()

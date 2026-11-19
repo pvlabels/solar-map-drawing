@@ -83,6 +83,8 @@ Equipment fields, placement decisions and report interpretation are defined toge
 
 Follow [Callouts](drawing-rules-callouts.md) for arrow style, routing angles, text attachments and all clearances. `allow_45: true` enables an exact 45-degree segment for that leader. The renderer normalizes routes without changing source target evidence and reports the final `shaft_route`; `target_element` binds the production endpoint to the equipment rectangle.
 
+For equipment, `via`/elbow coordinates are routing hints: a clear simpler route takes precedence. A route through the house or unrelated equipment is rejected with a request to reposition the label locally. Export keeps the foreground leader as one continuous stroked path with an attached Arrow 2 marker; `export_cleanup.attached_equipment_arrows` reports these connections. Keep the matching crossing-gap backing behind it. See the shared [Callouts](drawing-rules-callouts.md) and [Clean export](drawing-rules-export.md) rules instead of duplicating equipment routing instructions here.
+
 For nearby equipment callouts, add `group: "equipment-left"` (or another local group name) and a top-level layout entry:
 
 ```json

@@ -25,6 +25,7 @@ if ($OriginalRulesFile) {
 }
 
 $supersededPrefixes = @(
+    '- Put labels close to targets with short, few-elbow routes.',
     '- **Panels:**',
     '- **Equipment:**',
     '- **North:**',

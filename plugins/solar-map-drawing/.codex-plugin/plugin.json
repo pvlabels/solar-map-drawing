@@ -11,7 +11,7 @@
     "shortDescription": "Editable solar site maps"
   },
   "name": "solar-map-drawing",
-  "version": "3.4.1",
+  "version": "3.4.2",
   "description": "Create editable solar map placards from customer PDFs using ordered-size zones, source-confirmed warnings, compact callouts, production cutlines and footer identifiers.",
   "author": {
     "name": "jackson perry",

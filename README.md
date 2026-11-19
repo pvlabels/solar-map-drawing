@@ -1,6 +1,6 @@
 # Solar Map Drawing
 
-Version **3.4.1** packages three skills in the same plugin:
+Version **3.4.2** packages three skills in the same plugin:
 
 | Skill | Invocation | Output |
 | --- | --- | --- |
@@ -9,6 +9,10 @@ Version **3.4.1** packages three skills in the same plugin:
 | Finished Solar Map | `$solar-map-drawing` | Labeled map, source-confirmed caution wording, cutline and footer. |
 
 All three use the shared rules, renderer and vector assets under `plugins/solar-map-drawing/skills/solar-map-drawing/`. Panels within each countable array touch edge-to-edge without overlapping interiors, unless explicitly specified otherwise. Joined grids can shrink around their fixed array centers to keep 1 pt visible clearance from walls, roof lines and equipment. Modules share one size per map at 1.25 pt; interior walls are 1 pt, exterior perimeters 2 pt, and streets are horizontal or vertical. Equipment boxes use a common 1.5:1 ratio sized from the canonical Arrow 2 head. The original skill name remains the finished version. The host must provide Python/file execution; no separate model API key is required. Source interpretation and visual review remain agent-assisted.
+
+## Changes in 3.4.2
+
+Equipment leaders prefer the fewest necessary bends and reject routes across the house; reposition the label near its device when needed. Each equipment arrow stays one continuous editable stroke with an attached SVG Arrow 2 marker. Crossing-gap backing remains intact. Internal previews resolve markers for MuPDF; native Illustrator Stroke-panel attachment still requires import verification.
 
 ## Changes in 3.4.1
 
